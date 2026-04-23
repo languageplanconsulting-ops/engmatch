@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AssessmentResult, AnnotatedPhrase } from "@/app/api/speaking/assess/route";
 import { addNotebookEntry } from "@/lib/notebook-storage";
 
@@ -294,10 +294,60 @@ export function SpeakingAssessmentReport({
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = useState<AssessmentResult | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [loadingProgress, setLoadingProgress] = useState(1);
+  const [loadingStepIdx, setLoadingStepIdx] = useState(0);
+
+  const loadingSteps = [
+    {
+      en: "Getting your grammar signals",
+      th: "กำลังดึงสัญญาณด้านไวยากรณ์ของคุณ",
+    },
+    {
+      en: "Checking your vocabulary range",
+      th: "กำลังตรวจช่วงคำศัพท์ที่คุณใช้",
+    },
+    {
+      en: "Measuring fluency and flow",
+      th: "กำลังวัดความคล่องและความลื่นไหลในการพูด",
+    },
+    {
+      en: "Comparing with official IELTS band descriptors",
+      th: "กำลังเทียบกับเกณฑ์ Band Description อย่างเป็นทางการของ IELTS",
+    },
+    {
+      en: "Building personalized next-step coaching",
+      th: "กำลังสร้างแผนโค้ชเฉพาะตัวสำหรับครั้งถัดไป",
+    },
+    {
+      en: "Highlighting your strengths and weaknesses",
+      th: "กำลังสรุปจุดแข็งและจุดที่ควรพัฒนา",
+    },
+    {
+      en: "Preparing feedback as if P'Doy is beside you",
+      th: "กำลังเตรียมฟีดแบ็กเหมือนพี่ดอยนั่งติวอยู่ข้างๆ",
+    },
+  ];
+
+  useEffect(() => {
+    if (state !== "loading") return;
+
+    const interval = window.setInterval(() => {
+      setLoadingProgress((prev) => {
+        if (prev >= 95) return prev;
+        const delta = Math.max(1, Math.round((100 - prev) / 15));
+        return Math.min(95, prev + delta);
+      });
+      setLoadingStepIdx((prev) => (prev + 1) % loadingSteps.length);
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [state, loadingSteps.length]);
 
   async function assess() {
     setState("loading");
     setResult(null);
+    setLoadingProgress(3);
+    setLoadingStepIdx(0);
     try {
       const res = await fetch("/api/speaking/assess", {
         method: "POST",
@@ -323,17 +373,52 @@ export function SpeakingAssessmentReport({
     return (
       <div className="sp-assess-trigger">
         <button type="button" className="sp-assess-trigger-btn" onClick={assess}>
-          ✦ Get Personalized Feedback from English Plan&apos;s 6 Years of Database
+          ✦ Get personalized feedback from English Plan&apos;s 6 years of speaking database
         </button>
       </div>
     );
   }
 
   if (state === "loading") {
+    const activeStep = loadingSteps[loadingStepIdx];
     return (
-      <div className="sp-assess-loading">
-        <span className="sp-assess-spinner" aria-hidden="true" />
-        Analysing your response with English Plan&apos;s speaking feedback engine…
+      <div className="sp-assess-loading-card">
+        <div className="sp-assess-loading-head">
+          <div>
+            <p className="sp-assess-loading-kicker">English Plan Speaking Intelligence</p>
+            <h4 className="sp-assess-loading-title">Analyzing with 6 years of speaking database</h4>
+            <p className="sp-assess-loading-title-th">กำลังวิเคราะห์ด้วยฐานข้อมูลการพูดของ English Plan ตลอด 6 ปี</p>
+          </div>
+          <strong className="sp-assess-loading-percent">{loadingProgress}%</strong>
+        </div>
+
+        <div className="sp-assess-loading-progress" aria-hidden="true">
+          <span style={{ width: `${loadingProgress}%` }} />
+        </div>
+
+        <div className="sp-assess-loading-active">
+          <span className="sp-assess-spinner" aria-hidden="true" />
+          <div>
+            <p>{activeStep.en}</p>
+            <p>{activeStep.th}</p>
+          </div>
+        </div>
+
+        <ul className="sp-assess-loading-list">
+          {loadingSteps.slice(0, 5).map((step, idx) => {
+            const isDone = idx < loadingStepIdx;
+            const isCurrent = idx === loadingStepIdx;
+            return (
+              <li key={step.en} className={`sp-assess-loading-item${isCurrent ? " is-current" : ""}`}>
+                <span>{isDone ? "✓" : isCurrent ? "•" : "○"}</span>
+                <div>
+                  <p>{step.en}</p>
+                  <p>{step.th}</p>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       </div>
     );
   }
@@ -341,7 +426,7 @@ export function SpeakingAssessmentReport({
   if (state === "error") {
     return (
       <div className="sp-assess-error">
-        <strong>Assessment unavailable</strong>
+        <strong>English Plan feedback temporarily unavailable</strong>
         <p>{errorMsg}</p>
         <button type="button" className="sp-assess-trigger-btn" onClick={assess}>Retry</button>
       </div>

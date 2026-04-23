@@ -37,6 +37,14 @@ export type AssessmentResult = {
   improvedScript: string;
 };
 
+type GeminiCandidate = {
+  content?: {
+    parts?: Array<{ text?: string }>;
+  };
+};
+
+type JsonRecord = Record<string, unknown>;
+
 function extractFirstJsonObject(text: string) {
   const start = text.indexOf("{");
   if (start === -1) return null;
@@ -78,6 +86,138 @@ function extractFirstJsonObject(text: string) {
   }
 
   return null;
+}
+
+function cleanJsonCandidate(text: string) {
+  return text
+    .replace(/^\uFEFF/, "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .trim();
+}
+
+function parseJsonWithFallbacks(text: string): unknown {
+  const cleaned = cleanJsonCandidate(text);
+  const candidates = [cleaned];
+  const extracted = extractFirstJsonObject(cleaned);
+
+  if (extracted && extracted !== cleaned) {
+    candidates.push(extracted);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try one more pass for responses that are JSON-stringified JSON.
+      try {
+        const nested = JSON.parse(JSON.stringify(candidate)) as string;
+        return JSON.parse(nested);
+      } catch {
+        // Ignore and continue to the next fallback.
+      }
+    }
+  }
+
+  // If the response is wrapped as a JSON string, decode then parse again.
+  if (
+    (cleaned.startsWith("\"{") && cleaned.endsWith("}\"")) ||
+    (cleaned.startsWith("'{") && cleaned.endsWith("}'"))
+  ) {
+    const normalizedQuoted = cleaned.startsWith("'")
+      ? `"${cleaned.slice(1, -1).replace(/"/g, "\\\"")}"`
+      : cleaned;
+    const decoded = JSON.parse(normalizedQuoted) as string;
+    return JSON.parse(cleanJsonCandidate(decoded));
+  }
+
+  throw new Error("Unable to parse JSON");
+}
+
+function asString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function asStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => asString(item)).filter(Boolean)
+    : [];
+}
+
+function asScore(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(9, Math.round(numeric * 2) / 2));
+}
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function normalizeCriterion(value: unknown): CriterionDetail {
+  const record = asRecord(value);
+
+  return {
+    score: asScore(record.score),
+    scoreTh: asString(record.scoreTh),
+    scoreEn: asString(record.scoreEn),
+    whyBullets: asStringArray(record.whyBullets).slice(0, 5),
+    improveBullets: asStringArray(record.improveBullets).slice(0, 10),
+  };
+}
+
+function normalizeAnnotations(value: unknown): AnnotatedPhrase[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      const record = asRecord(item);
+      const category = asString(record.category);
+      if (!["grammar", "vocabulary", "pronunciation", "coherence"].includes(category)) {
+        return null;
+      }
+
+      return {
+        phrase: asString(record.phrase),
+        category: category as AnnotatedPhrase["category"],
+        issue: asString(record.issue),
+        correction: asString(record.correction),
+      };
+    })
+    .filter((item): item is AnnotatedPhrase => Boolean(item && item.phrase && item.issue))
+    .slice(0, 8);
+}
+
+function averageScores(details: CriterionDetail[]) {
+  const validScores = details.map((detail) => detail.score).filter((score) => score > 0);
+  if (!validScores.length) return 0;
+  const average = validScores.reduce((sum, score) => sum + score, 0) / validScores.length;
+  return Math.round(average * 2) / 2;
+}
+
+function normalizeAssessmentResult(value: unknown): AssessmentResult {
+  const record = asRecord(value);
+  const fluency = normalizeCriterion(record.fluency);
+  const vocabulary = normalizeCriterion(record.vocabulary);
+  const grammar = normalizeCriterion(record.grammar);
+  const pronunciation = normalizeCriterion(record.pronunciation);
+  const overall =
+    asScore(record.overall) || averageScores([fluency, vocabulary, grammar, pronunciation]);
+
+  return {
+    punctuatedTranscript: asString(record.punctuatedTranscript),
+    fluency,
+    vocabulary,
+    grammar,
+    pronunciation,
+    overall,
+    overallTh: asString(record.overallTh),
+    overallEn: asString(record.overallEn),
+    annotations: normalizeAnnotations(record.annotations),
+    improvedScript: asString(record.improvedScript),
+  };
 }
 
 const CRITERIA_RUBRIC = `
@@ -233,7 +373,11 @@ OUTPUT FORMAT (return exactly this JSON):
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.15, maxOutputTokens: 4096 },
+        generationConfig: {
+          temperature: 0.15,
+          maxOutputTokens: 4096,
+          responseMimeType: "application/json",
+        },
       }),
     },
   );
@@ -241,26 +385,36 @@ OUTPUT FORMAT (return exactly this JSON):
   if (!geminiRes.ok) {
     const errText = await geminiRes.text();
     return NextResponse.json(
-      { error: `Gemini API error ${geminiRes.status}: ${errText}` },
+      { error: `Speaking assessment service error ${geminiRes.status}: ${errText}` },
       { status: 502 },
     );
   }
 
   const geminiJson = (await geminiRes.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    candidates?: GeminiCandidate[];
   };
+  const rawText = (geminiJson.candidates ?? [])
+    .flatMap((candidate) => candidate.content?.parts ?? [])
+    .map((part) => part.text ?? "")
+    .join("\n")
+    .trim();
 
-  const rawText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-  const extractedJson = extractFirstJsonObject(cleaned);
-  const candidateJson = extractedJson ?? cleaned;
-
+  if (!rawText) {
+    return NextResponse.json(
+      { error: "The speaking assessment service returned an empty response." },
+      { status: 502 },
+    );
+  }
   let result: AssessmentResult;
   try {
-    result = JSON.parse(candidateJson) as AssessmentResult;
+    result = normalizeAssessmentResult(parseJsonWithFallbacks(rawText));
   } catch {
     return NextResponse.json(
-      { error: "Failed to parse Gemini response.", raw: rawText.slice(0, 1200) },
+      {
+        error:
+          "Assessment temporarily unavailable from English Plan's 6 years of speaking database.",
+        raw: rawText.slice(0, 1200),
+      },
       { status: 502 },
     );
   }

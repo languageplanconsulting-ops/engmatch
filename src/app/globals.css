@@ -4164,13 +4164,126 @@ mark.reading-user-highlight {
   border-color: #1d4ed8;
 }
 
-.sp-assess-loading {
+.sp-assess-loading-card {
+  border: 2px solid var(--border);
+  background: linear-gradient(145deg, #f8fafc 0%, #ffffff 45%, #eff6ff 100%);
+  padding: 14px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sp-assess-loading-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.sp-assess-loading-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: #334155;
+}
+
+.sp-assess-loading-title {
+  margin: 4px 0 0;
+  font-size: 1rem;
+  line-height: 1.35;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.sp-assess-loading-title-th {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #475569;
+}
+
+.sp-assess-loading-percent {
+  font-size: 1.2rem;
+  font-weight: 900;
+  color: #1d4ed8;
+  min-width: 56px;
+  text-align: right;
+}
+
+.sp-assess-loading-progress {
+  width: 100%;
+  height: 10px;
+  border: 1px solid #bfdbfe;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.sp-assess-loading-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6 0%, #2563eb 50%, #1d4ed8 100%);
+  transition: width 0.35s ease;
+}
+
+.sp-assess-loading-active {
+  display: flex;
+  align-items: flex-start;
   gap: 10px;
-  font-size: 0.88rem;
+  padding: 10px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+}
+
+.sp-assess-loading-active p {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.sp-assess-loading-active p:last-child {
+  color: #475569;
+}
+
+.sp-assess-loading-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sp-assess-loading-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.sp-assess-loading-item span {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: #64748b;
+  font-weight: 800;
+}
+
+.sp-assess-loading-item p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+.sp-assess-loading-item p:first-child {
+  font-size: 0.8rem;
   font-weight: 700;
-  color: var(--text-2);
+  color: #334155;
+}
+
+.sp-assess-loading-item.is-current p:first-child {
+  color: #1d4ed8;
 }
 
 .sp-assess-spinner {
