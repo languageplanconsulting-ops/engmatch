@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
-  getMergedSpeakingTests,
   getSpeakingModeLabel,
+  mergeSpeakingTests,
   type SpeakingAnyTest,
   type SpeakingMode,
   type SpeakingTip,
+  type StoredSpeakingPackRecord,
 } from "@/lib/speaking-demo";
 
 type Props = { mode: SpeakingMode };
@@ -106,7 +107,17 @@ export function SpeakingTestBrowser({ mode }: Props) {
   const [tests, setTests] = useState<SpeakingAnyTest[]>([]);
 
   useEffect(() => {
-    setTests(getMergedSpeakingTests(mode));
+    async function load() {
+      const res = await fetch("/api/speaking/packs", { cache: "no-store" });
+      if (!res.ok) {
+        setTests(mergeSpeakingTests(mode, []));
+        return;
+      }
+      const data = (await res.json()) as { items?: StoredSpeakingPackRecord[] };
+      setTests(mergeSpeakingTests(mode, data.items ?? []));
+    }
+
+    void load();
   }, [mode]);
 
   const modeDescriptions: Partial<Record<SpeakingMode, string>> = {

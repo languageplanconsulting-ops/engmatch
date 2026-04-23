@@ -66,6 +66,15 @@ export type SpeakingAnyTest =
   | SpeakingCueCardTest
   | SpeakingFullMockTest;
 
+export type StoredSpeakingPackRecord = {
+  packId: string;
+  mode: SpeakingMode;
+  name: string;
+  topic: string;
+  uploadedAt: string;
+  payload: SpeakingAnyTest;
+};
+
 export const speakingModes: { slug: SpeakingMode; title: string; href: string }[] = [
   { slug: "part-1", title: "Part 1", href: "/speaking/part-1" },
   { slug: "part-2", title: "Part 2", href: "/speaking/part-2" },
@@ -533,44 +542,34 @@ export function getSpeakingTest(mode: SpeakingMode, testId: string) {
   return getSpeakingTestsByMode(mode).find((test) => test.id === testId);
 }
 
-function getSpeakingUploadsKey() {
-  return "engmatch-speaking-uploads";
+export function isSpeakingAnyTest(value: unknown): value is SpeakingAnyTest {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { id?: unknown; mode?: unknown };
+  return (
+    typeof candidate.id === "string" &&
+    (candidate.mode === "part-1" ||
+      candidate.mode === "part-2" ||
+      candidate.mode === "part-3" ||
+      candidate.mode === "full-test")
+  );
 }
 
-export function readStoredSpeakingUploads(): SpeakingAnyTest[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(getSpeakingUploadsKey());
-    if (!raw) {
-      return [];
-    }
-
-    return JSON.parse(raw) as SpeakingAnyTest[];
-  } catch {
-    return [];
-  }
+export function normalizeSpeakingPackRecord(test: SpeakingAnyTest): StoredSpeakingPackRecord {
+  return {
+    packId: test.id,
+    mode: test.mode,
+    name: test.name,
+    topic: test.topic,
+    uploadedAt: test.uploadedAt,
+    payload: test,
+  };
 }
 
-export function writeStoredSpeakingUploads(tests: SpeakingAnyTest[]) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.setItem(getSpeakingUploadsKey(), JSON.stringify(tests));
-}
-
-export function upsertStoredSpeakingUpload(test: SpeakingAnyTest) {
-  const current = readStoredSpeakingUploads();
-  const next = [...current.filter((item) => item.id !== test.id), test];
-  writeStoredSpeakingUploads(next);
-  return next;
-}
-
-export function getMergedSpeakingTests(mode: SpeakingMode) {
+export function mergeSpeakingTests(mode: SpeakingMode, storedRecords: StoredSpeakingPackRecord[]) {
   const defaults = getSpeakingTestsByMode(mode);
-  const custom = readStoredSpeakingUploads().filter((item) => item.mode === mode);
-  return [...custom, ...defaults];
+  const custom = storedRecords
+    .filter((item) => item.mode === mode)
+    .map((item) => item.payload);
+
+  return [...custom, ...defaults.filter((test) => !custom.some((item) => item.id === test.id))];
 }

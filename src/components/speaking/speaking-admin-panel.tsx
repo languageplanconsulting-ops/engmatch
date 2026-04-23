@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  getMergedSpeakingTests,
-  readStoredSpeakingUploads,
   speakingUploadTemplates,
   type SpeakingAnyTest,
   type SpeakingMode,
   type SpeakingQuickfireTest,
-  upsertStoredSpeakingUpload,
-  writeStoredSpeakingUploads,
+  isSpeakingAnyTest,
+  mergeSpeakingTests,
+  type StoredSpeakingPackRecord,
 } from "@/lib/speaking-demo";
 
 type TemplateMode = "part-1" | "part-2" | "part-3";
@@ -27,18 +26,6 @@ type TtsProgress = {
   errors: string[];
 };
 
-function isSpeakingAnyTest(value: unknown): value is SpeakingAnyTest {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as { id?: unknown; mode?: unknown };
-  return (
-    typeof candidate.id === "string" &&
-    (candidate.mode === "part-1" ||
-      candidate.mode === "part-2" ||
-      candidate.mode === "part-3" ||
-      candidate.mode === "full-test")
-  );
-}
-
 export function SpeakingAdminPanel() {
   const [mode, setMode] = useState<TemplateMode>("part-1");
   const [jsonText, setJsonText] = useState(speakingUploadTemplates["part-1"]);
@@ -49,13 +36,13 @@ export function SpeakingAdminPanel() {
   const [uploadMessage, setUploadMessage] = useState("");
   const [ttsProgress, setTtsProgress] = useState<TtsProgress | null>(null);
   const [ttsState, setTtsState] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [uploadedPacks, setUploadedPacks] = useState<SpeakingAnyTest[]>([]);
+  const [uploadedPacks, setUploadedPacks] = useState<StoredSpeakingPackRecord[]>([]);
 
   const [counts, setCounts] = useState<Record<SpeakingMode, number>>(() => ({
-    "part-1": getMergedSpeakingTests("part-1").length,
-    "part-2": getMergedSpeakingTests("part-2").length,
-    "part-3": getMergedSpeakingTests("part-3").length,
-    "full-test": getMergedSpeakingTests("full-test").length,
+    "part-1": mergeSpeakingTests("part-1", []).length,
+    "part-2": mergeSpeakingTests("part-2", []).length,
+    "part-3": mergeSpeakingTests("part-3", []).length,
+    "full-test": mergeSpeakingTests("full-test", []).length,
   }));
 
   const providerInfo = useMemo(
@@ -67,18 +54,23 @@ export function SpeakingAdminPanel() {
     [],
   );
 
-  useEffect(() => {
-    setUploadedPacks(readStoredSpeakingUploads());
-  }, []);
-
-  function refreshCounts() {
+  async function refreshFromServer() {
+    const res = await fetch("/api/admin/speaking/packs", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = (await res.json()) as { items?: StoredSpeakingPackRecord[] };
+    const items = data.items ?? [];
+    setUploadedPacks(items);
     setCounts({
-      "part-1": getMergedSpeakingTests("part-1").length,
-      "part-2": getMergedSpeakingTests("part-2").length,
-      "part-3": getMergedSpeakingTests("part-3").length,
-      "full-test": getMergedSpeakingTests("full-test").length,
+      "part-1": mergeSpeakingTests("part-1", items).length,
+      "part-2": mergeSpeakingTests("part-2", items).length,
+      "part-3": mergeSpeakingTests("part-3", items).length,
+      "full-test": mergeSpeakingTests("full-test", items).length,
     });
   }
+
+  useEffect(() => {
+    void refreshFromServer();
+  }, []);
 
   function handleModeChange(nextMode: TemplateMode) {
     setMode(nextMode);
@@ -97,7 +89,7 @@ export function SpeakingAdminPanel() {
     setTimeout(() => setCopyState("idle"), 1600);
   }
 
-  function handleUpload() {
+  async function handleUpload() {
     try {
       const parsed = JSON.parse(jsonText) as unknown;
       const packs = Array.isArray(parsed) ? parsed : [parsed];
@@ -106,8 +98,19 @@ export function SpeakingAdminPanel() {
         throw new Error("No valid speaking packs found");
       }
 
-      validPacks.forEach((pack) => upsertStoredSpeakingUpload(pack));
-      setUploadedPacks(readStoredSpeakingUploads());
+      const res = await fetch("/api/admin/speaking/packs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packs: validPacks }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to save packs");
+      }
+
+      const data = (await res.json()) as { items?: StoredSpeakingPackRecord[] };
+      const items = data.items ?? [];
+      setUploadedPacks(items);
       setUploadedCount(validPacks.length);
       if (validPacks.length === 1) {
         setUploadedTest(validPacks[0]);
@@ -118,7 +121,12 @@ export function SpeakingAdminPanel() {
           `${validPacks.length} packs uploaded in bulk. TTS generation works per single pack upload.`,
         );
       }
-      refreshCounts();
+      setCounts({
+        "part-1": mergeSpeakingTests("part-1", items).length,
+        "part-2": mergeSpeakingTests("part-2", items).length,
+        "part-3": mergeSpeakingTests("part-3", items).length,
+        "full-test": mergeSpeakingTests("full-test", items).length,
+      });
       setUploadState("ok");
       setTtsState("idle");
       setTtsProgress(null);
@@ -129,11 +137,12 @@ export function SpeakingAdminPanel() {
     }
   }
 
-  function removeUploadedPack(packId: string) {
-    const next = readStoredSpeakingUploads().filter((pack) => pack.id !== packId);
-    writeStoredSpeakingUploads(next);
-    setUploadedPacks(next);
-    refreshCounts();
+  async function removeUploadedPack(packId: string) {
+    const res = await fetch(`/api/admin/speaking/packs?packId=${encodeURIComponent(packId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) return;
+    await refreshFromServer();
     if (uploadedTest?.id === packId) {
       setUploadedTest(null);
       setUploadState("idle");
@@ -201,8 +210,13 @@ export function SpeakingAdminPanel() {
       updatedTest = uploadedTest;
     }
 
-    upsertStoredSpeakingUpload(updatedTest);
+    await fetch("/api/admin/speaking/packs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ packs: [updatedTest] }),
+    });
     setUploadedTest(updatedTest);
+    await refreshFromServer();
     setTtsProgress({ total: questions.length, done: questions.length, current: "", errors });
     setTtsState(errors.length === 0 ? "done" : "error");
   }
@@ -260,14 +274,14 @@ export function SpeakingAdminPanel() {
             <div className="stack-sm" style={{ marginTop: 10 }}>
               {uploadedPacks.map((pack) => {
                 const count =
-                  "questions" in pack
-                    ? pack.questions.length
-                    : "question" in pack
+                  "questions" in pack.payload
+                    ? pack.payload.questions.length
+                    : "question" in pack.payload
                       ? 1
                       : 0;
                 return (
                   <div
-                    key={pack.id}
+                    key={pack.packId}
                     className="info-tile"
                     style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}
                   >
@@ -280,7 +294,7 @@ export function SpeakingAdminPanel() {
                     <button
                       type="button"
                       className="action-button"
-                      onClick={() => removeUploadedPack(pack.id)}
+                      onClick={() => removeUploadedPack(pack.packId)}
                     >
                       Remove
                     </button>

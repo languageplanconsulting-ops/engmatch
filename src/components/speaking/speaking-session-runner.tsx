@@ -3,15 +3,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  getMergedSpeakingTests,
   getSpeakingModeLabel,
   getSpeakingTestsByMode,
+  mergeSpeakingTests,
   type SpeakingAnyTest,
   type SpeakingCueCardTest,
   type SpeakingFullMockTest,
   type SpeakingMode,
   type SpeakingQuickfireTest,
   type SpeakingTip,
+  type StoredSpeakingPackRecord,
 } from "@/lib/speaking-demo";
 import { SpeakingAssessmentReport } from "@/components/speaking/speaking-assessment-report";
 
@@ -951,13 +952,32 @@ export function SpeakingSessionRunner({ mode, test }: { mode: SpeakingMode; test
 }
 
 export function SpeakingSessionLoader({ mode, testId }: { mode: SpeakingMode; testId: string }) {
-  const test = useMemo(
-    () =>
-      getMergedSpeakingTests(mode).find((t) => t.id === testId) ??
-      getSpeakingTestsByMode(mode).find((t) => t.id === testId) ??
-      null,
-    [mode, testId],
-  );
+  const [test, setTest] = useState<SpeakingAnyTest | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function load() {
+      const defaultMatch = getSpeakingTestsByMode(mode).find((t) => t.id === testId) ?? null;
+      const res = await fetch("/api/speaking/packs", { cache: "no-store" });
+
+      if (!res.ok) {
+        if (active) setTest(defaultMatch);
+        return;
+      }
+
+      const data = (await res.json()) as { items?: StoredSpeakingPackRecord[] };
+      const merged =
+        mergeSpeakingTests(mode, data.items ?? []).find((t) => t.id === testId) ?? defaultMatch;
+
+      if (active) setTest(merged);
+    }
+
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [mode, testId]);
 
   if (!test) {
     return (

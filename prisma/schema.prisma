@@ -15,3 +15,15 @@ model DemoUser {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model SpeakingPack {
+  id         String   @id @default(cuid())
+  packId     String   @unique
+  mode       String
+  name       String
+  topic      String
+  uploadedAt DateTime
+  payload    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
