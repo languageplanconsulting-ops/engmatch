@@ -37,6 +37,49 @@ export type AssessmentResult = {
   improvedScript: string;
 };
 
+function extractFirstJsonObject(text: string) {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const char = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
 const CRITERIA_RUBRIC = `
 IELTS Speaking Assessment Criteria (Official Band Descriptors)
 
@@ -209,13 +252,15 @@ OUTPUT FORMAT (return exactly this JSON):
 
   const rawText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+  const extractedJson = extractFirstJsonObject(cleaned);
+  const candidateJson = extractedJson ?? cleaned;
 
   let result: AssessmentResult;
   try {
-    result = JSON.parse(cleaned) as AssessmentResult;
+    result = JSON.parse(candidateJson) as AssessmentResult;
   } catch {
     return NextResponse.json(
-      { error: "Failed to parse Gemini response.", raw: rawText.slice(0, 500) },
+      { error: "Failed to parse Gemini response.", raw: rawText.slice(0, 1200) },
       { status: 502 },
     );
   }
