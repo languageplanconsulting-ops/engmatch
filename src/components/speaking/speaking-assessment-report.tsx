@@ -323,7 +323,7 @@ export function SpeakingAssessmentReport({
     return (
       <div className="sp-assess-trigger">
         <button type="button" className="sp-assess-trigger-btn" onClick={assess}>
-          ✦ Get AI Assessment (Gemini 2.5)
+          ✦ Get Personalized Feedback from English Plan&apos;s 6 Years of Database
         </button>
       </div>
     );
@@ -333,7 +333,7 @@ export function SpeakingAssessmentReport({
     return (
       <div className="sp-assess-loading">
         <span className="sp-assess-spinner" aria-hidden="true" />
-        Analysing your response with Gemini 2.5…
+        Analysing your response with English Plan&apos;s speaking feedback engine…
       </div>
     );
   }
