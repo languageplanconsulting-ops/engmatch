@@ -104,6 +104,7 @@ export async function POST(req: Request) {
     body.mode === "part-1"
       ? "Part 1 (personal questions, ~1 min answers)"
       : "Part 3 (abstract discussion, extended answers)";
+  const model = "gemini-2.5-flash";
 
   const prompt = `You are an expert IELTS speaking examiner and a bilingual English–Thai language teacher.
 
@@ -183,7 +184,7 @@ OUTPUT FORMAT (return exactly this JSON):
 }`;
 
   const geminiRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

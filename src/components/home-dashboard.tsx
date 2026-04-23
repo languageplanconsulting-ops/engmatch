@@ -220,10 +220,10 @@ function CountdownCard() {
 // ─── Skill cards ───────────────────────────────────────────────────────────────
 
 const SKILLS = [
-  { href: "/reading", label: "Reading" },
-  { href: "/writing", label: "Writing" },
-  { href: "/speaking", label: "Speaking" },
-  { href: "/listening", label: "Listening" },
+  { href: "/reading", label: "Reading", soon: true },
+  { href: "/writing", label: "Writing", soon: true },
+  { href: "/speaking", label: "Speaking", soon: false },
+  { href: "/listening", label: "Listening", soon: true },
 ];
 
 // ─── Page ──────────────────────────────────────────────────────────────────────
@@ -243,7 +243,10 @@ export function HomeDashboard() {
       <div className="dash-skills">
         {SKILLS.map((s) => (
           <Link key={s.href} href={s.href} className="dash-skill-card">
-            <span className="dash-skill-name">{s.label}</span>
+            <div className="dash-skill-head">
+              <span className="dash-skill-name">{s.label}</span>
+              {s.soon ? <span className="dash-skill-badge">Coming soon</span> : null}
+            </div>
             <span className="dash-skill-arrow">→</span>
           </Link>
         ))}

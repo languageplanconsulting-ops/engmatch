@@ -16,6 +16,14 @@ type RouteLink = {
   label: string;
 };
 
+const TEMPORARILY_LOCKED_SECTIONS = new Set(["Listening", "Reading", "Writing"]);
+const SECTION_REOPEN_DATE_LABEL = "April 29, 2026";
+const SECTION_REOPEN_AT = new Date("2026-04-30T00:00:00+07:00");
+
+export function isSectionTemporarilyUnavailable(section: string) {
+  return TEMPORARILY_LOCKED_SECTIONS.has(section) && Date.now() < SECTION_REOPEN_AT.getTime();
+}
+
 export function AppShell({
   children,
 }: {
@@ -31,10 +39,19 @@ export function AppShell({
           <p className="brand-tag">IELTS Architect Notebook</p>
         </div>
         <nav className="topnav" aria-label="Primary">
-          <Link href="/listening">Listening</Link>
-          <Link href="/reading">Reading</Link>
+          <Link href="/listening">
+            Listening
+            {isSectionTemporarilyUnavailable("Listening") ? <span className="topnav-badge">Soon</span> : null}
+          </Link>
+          <Link href="/reading">
+            Reading
+            {isSectionTemporarilyUnavailable("Reading") ? <span className="topnav-badge">Soon</span> : null}
+          </Link>
           <Link href="/speaking">Speaking</Link>
-          <Link href="/writing">Writing</Link>
+          <Link href="/writing">
+            Writing
+            {isSectionTemporarilyUnavailable("Writing") ? <span className="topnav-badge">Soon</span> : null}
+          </Link>
           <Link href="/notebook">Notebook</Link>
           <Link href="/notifications">Notifications</Link>
           <Link href="/admin">Teacher/Admin</Link>
@@ -104,13 +121,19 @@ export function SectionLayout({
   section: string;
   children: ReactNode;
 }) {
+  const isLocked = isSectionTemporarilyUnavailable(section);
+
   return (
     <div className="stack-md">
       <div className="section-banner">
         <span>{section}</span>
-        <p>Choose a section to continue your IELTS practice.</p>
+        <p>
+          {isLocked
+            ? `This section is temporarily closed for students and will reopen on ${SECTION_REOPEN_DATE_LABEL}.`
+            : "Choose a section to continue your IELTS practice."}
+        </p>
       </div>
-      {children}
+      {isLocked ? <TemporarySectionNotice section={section} /> : children}
     </div>
   );
 }
@@ -129,5 +152,38 @@ export function MetricList({
         </article>
       ))}
     </div>
+  );
+}
+
+export function TemporarySectionNotice({
+  section,
+}: {
+  section: string;
+}) {
+  return (
+    <section className="stack-lg">
+      <div className="callout coming-soon-callout">
+        <p className="eyebrow">Coming Soon</p>
+        <h2>{section} is temporarily unavailable</h2>
+        <p>
+          We are polishing the student experience for this section. Public access is paused until{" "}
+          <strong>{SECTION_REOPEN_DATE_LABEL}</strong>.
+        </p>
+        <p>
+          Speaking is available now, and teachers can still review materials from the admin area while
+          we finish the update.
+        </p>
+        <div className="coming-soon-actions">
+          <Link className="route-card coming-soon-card" href="/speaking">
+            <span>Speaking is live</span>
+            <strong>Open</strong>
+          </Link>
+          <Link className="route-card coming-soon-card" href="/admin">
+            <span>Teacher/Admin access</span>
+            <strong>Open</strong>
+          </Link>
+        </div>
+      </div>
+    </section>
   );
 }

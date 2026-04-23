@@ -95,8 +95,27 @@ a {
 }
 
 .topnav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 10px 12px;
   border: 2px solid transparent;
+}
+
+.topnav-badge,
+.dash-skill-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  border: 2px solid var(--border);
+  background: var(--signal);
+  color: var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .topnav a:hover,
@@ -241,6 +260,24 @@ code {
 
 .stack-md {
   gap: 18px;
+}
+
+.coming-soon-callout {
+  padding: 28px;
+  background:
+    linear-gradient(135deg, rgba(255, 204, 0, 0.16) 0, rgba(255, 204, 0, 0.16) 18%, transparent 18%, transparent 100%),
+    linear-gradient(180deg, var(--paper) 0%, var(--paper-2) 100%);
+}
+
+.coming-soon-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.coming-soon-card {
+  min-height: 0;
 }
 
 .section-header {
@@ -6035,6 +6072,12 @@ mark.reading-user-highlight {
   overflow: hidden;
 }
 
+.dash-skill-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .dash-skill-card::before {
   content: "";
   position: absolute;
@@ -6071,6 +6114,10 @@ mark.reading-user-highlight {
   letter-spacing: -0.03em;
   line-height: 1;
   transition: color 160ms ease;
+}
+
+.dash-skill-badge {
+  width: fit-content;
 }
 
 .dash-skill-arrow {
