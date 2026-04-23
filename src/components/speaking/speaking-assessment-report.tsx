@@ -2,34 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { AssessmentResult, AnnotatedPhrase } from "@/app/api/speaking/assess/route";
-
-// ─── Notebook helpers (localStorage) ─────────────────────────────────────────
-
-type NotebookEntry = {
-  id: string;
-  category: string;
-  content: string;
-  addedAt: string;
-};
-
-function addToNotebook(content: string) {
-  const entries: NotebookEntry[] = (() => {
-    try {
-      return JSON.parse(localStorage.getItem("engmatch-notebook") ?? "[]") as NotebookEntry[];
-    } catch {
-      return [];
-    }
-  })();
-
-  const entry: NotebookEntry = {
-    id: `nb-sp-${Date.now()}`,
-    category: "Speaking",
-    content,
-    addedAt: new Date().toISOString(),
-  };
-
-  localStorage.setItem("engmatch-notebook", JSON.stringify([...entries, entry]));
-}
+import { addNotebookEntry } from "@/lib/notebook-storage";
 
 // ─── "Add to notebook" button ─────────────────────────────────────────────────
 
@@ -37,7 +10,15 @@ function NotebookBtn({ content }: { content: string }) {
   const [state, setState] = useState<"idle" | "done">("idle");
 
   function handleClick() {
-    addToNotebook(content);
+    addNotebookEntry({
+      categoryName: "Speaking",
+      kind: content.toLowerCase().includes("grammar") ? "Grammar point" : "Vocabulary",
+      term: content.split("—")[0]?.trim() || "Speaking note",
+      meaning: "",
+      explanation: content,
+      personalNotes: "",
+      source: "speaking-feedback",
+    });
     setState("done");
     setTimeout(() => setState("idle"), 2400);
   }
