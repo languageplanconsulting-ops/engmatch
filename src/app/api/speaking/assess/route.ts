@@ -1282,9 +1282,9 @@ export async function POST(req: Request) {
     },
   };
   const providers: Array<() => Promise<{ provider: "openai" | "anthropic" | "gemini"; model: string; text: string }>> = [
-    () => withProviderTimeout("openai", (signal) => callOpenAI(prompt, signal)),
-    () => withProviderTimeout("anthropic", (signal) => callClaude(prompt, signal)),
     () => withProviderTimeout("gemini", (signal) => callGemini(prompt, signal)),
+    () => withProviderTimeout("anthropic", (signal) => callClaude(prompt, signal)),
+    () => withProviderTimeout("openai", (signal) => callOpenAI(prompt, signal)),
   ];
   const failures: string[] = [];
   const providerDiagnostics: Array<{
@@ -1298,7 +1298,7 @@ export async function POST(req: Request) {
     status?: number;
     responseSnippet?: string;
   }> = [];
-  const providerOrder: Array<"openai" | "anthropic" | "gemini"> = ["openai", "anthropic", "gemini"];
+  const providerOrder: Array<"openai" | "anthropic" | "gemini"> = ["gemini", "anthropic", "openai"];
   try {
     for (const [idx, callProvider] of providers.entries()) {
       const providerId = providerOrder[idx];
