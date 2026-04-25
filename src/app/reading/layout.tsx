@@ -1,6 +1,6 @@
-import { SectionLayout } from "@/lib/page-builders";
 import type { ReactNode } from "react";
+import { StudentAccessGuard } from "@/components/student-access-guard";
 
 export default function ReadingLayout({ children }: { children: ReactNode }) {
-  return <SectionLayout section="Reading">{children}</SectionLayout>;
+  return <StudentAccessGuard skill="reading">{children}</StudentAccessGuard>;
 }

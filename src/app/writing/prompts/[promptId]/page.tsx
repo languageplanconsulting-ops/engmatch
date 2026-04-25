@@ -1,13 +1,14 @@
 import { notFound } from "next/navigation";
 import { WritingPromptVisual } from "@/components/writing/writing-prompt-visual";
 import { WritingResponseWorkspace } from "@/components/writing/writing-response-workspace";
+import { getDbWritingPrompt } from "@/lib/db-content";
 import { getWritingPrompt } from "@/lib/writing-demo";
 
 export default async function WritingPromptPage(
   props: PageProps<"/writing/prompts/[promptId]">,
 ) {
   const { promptId } = await props.params;
-  const prompt = getWritingPrompt(promptId);
+  const prompt = (await getDbWritingPrompt(promptId)) ?? getWritingPrompt(promptId);
 
   if (!prompt) {
     notFound();

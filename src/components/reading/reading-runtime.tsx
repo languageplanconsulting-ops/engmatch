@@ -48,10 +48,26 @@ function useImportedReadingPackages() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      setPackages(readImportedPackages());
-      setLoaded(true);
-    });
+    void (async () => {
+      const localPackages = readImportedPackages();
+
+      try {
+        const response = await fetch("/api/reading/imports", { cache: "no-store" });
+        if (!response.ok) {
+          setPackages(localPackages);
+          setLoaded(true);
+          return;
+        }
+
+        const payload = (await response.json()) as { items?: ReadingImportedTestPackage[] };
+        const remotePackages = payload.items ?? [];
+        setPackages(remotePackages.length > 0 ? remotePackages : localPackages);
+      } catch {
+        setPackages(localPackages);
+      } finally {
+        setLoaded(true);
+      }
+    })();
   }, []);
 
   return { packages, loaded };
@@ -108,7 +124,6 @@ function resolveImportedTest(
 
 export function ReadingLibraryClient() {
   const { packages } = useImportedReadingPackages();
-  const [scoreByTestId, setScoreByTestId] = useState<Record<string, number | null>>({});
 
   const readyImports = useMemo(
     () =>
@@ -215,8 +230,8 @@ export function ReadingLibraryClient() {
     return cards;
   }, [readyImports]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+  const scoreByTestId = useMemo(() => {
+    if (typeof window === "undefined") return {} as Record<string, number | null>;
     const testIds = [
       ...builtInPassages.map((card) => card.id),
       ...importedPassages.map((card) => card.id),
@@ -226,7 +241,7 @@ export function ReadingLibraryClient() {
     testIds.forEach((id) => {
       next[id] = readScorePct(id);
     });
-    setScoreByTestId(next);
+    return next;
   }, [builtInPassages, importedPassages, fullTestCards]);
 
   return (

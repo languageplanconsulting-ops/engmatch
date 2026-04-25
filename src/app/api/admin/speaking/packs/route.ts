@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { SpeakingMode } from "@/lib/speaking-demo";
 import {
-  isSpeakingAnyTest,
-  normalizeSpeakingPackRecord,
-  type SpeakingAnyTest,
-  type SpeakingMode,
-} from "@/lib/speaking-demo";
+  getPackPart,
+  getPackQuestionCount,
+  speakingPackSchema,
+  type SpeakingRebuildPack,
+} from "@/lib/speaking-rebuild-schema";
 
 type SpeakingPackRequest = {
   packs?: unknown;
@@ -14,18 +15,22 @@ type SpeakingPackRequest = {
 function toResponseRecord(record: {
   packId: string;
   mode: string;
+  part: string;
   name: string;
   topic: string;
+  questionCount: number;
   uploadedAt: Date;
   payload: unknown;
 }) {
   return {
     packId: record.packId,
     mode: record.mode as SpeakingMode,
+    part: record.part,
     name: record.name,
     topic: record.topic,
+    questionCount: record.questionCount,
     uploadedAt: record.uploadedAt.toISOString().slice(0, 10),
-    payload: record.payload as SpeakingAnyTest,
+    payload: record.payload as SpeakingRebuildPack,
   };
 }
 
@@ -49,30 +54,42 @@ export async function POST(req: Request) {
   }
 
   const rawPacks = Array.isArray(body.packs) ? body.packs : [];
-  const packs = rawPacks.filter(isSpeakingAnyTest);
-
-  if (packs.length === 0) {
-    return NextResponse.json({ error: "No valid speaking packs found." }, { status: 400 });
+  const parsedPacks: SpeakingRebuildPack[] = [];
+  for (const candidate of rawPacks) {
+    const parsed = speakingPackSchema.safeParse(candidate);
+    if (parsed.success) {
+      parsedPacks.push(parsed.data);
+    }
   }
 
-  for (const pack of packs) {
-    const normalized = normalizeSpeakingPackRecord(pack);
+  if (parsedPacks.length === 0) {
+    return NextResponse.json(
+      { error: "No valid speaking packs found. Part 1/3 require 4-6 questions; Part 2 requires exactly one question." },
+      { status: 400 },
+    );
+  }
+
+  for (const pack of parsedPacks) {
     await prisma.speakingPack.upsert({
-      where: { packId: normalized.packId },
+      where: { packId: pack.id },
       update: {
-        mode: normalized.mode,
-        name: normalized.name,
-        topic: normalized.topic,
-        uploadedAt: new Date(normalized.uploadedAt),
-        payload: normalized.payload,
+        mode: pack.mode,
+        part: getPackPart(pack),
+        name: pack.name,
+        topic: pack.topic,
+        questionCount: getPackQuestionCount(pack),
+        uploadedAt: new Date(pack.uploadedAt),
+        payload: pack,
       },
       create: {
-        packId: normalized.packId,
-        mode: normalized.mode,
-        name: normalized.name,
-        topic: normalized.topic,
-        uploadedAt: new Date(normalized.uploadedAt),
-        payload: normalized.payload,
+        packId: pack.id,
+        mode: pack.mode,
+        part: getPackPart(pack),
+        name: pack.name,
+        topic: pack.topic,
+        questionCount: getPackQuestionCount(pack),
+        uploadedAt: new Date(pack.uploadedAt),
+        payload: pack,
       },
     });
   }
@@ -82,7 +99,7 @@ export async function POST(req: Request) {
   });
 
   return NextResponse.json({
-    savedCount: packs.length,
+    savedCount: parsedPacks.length,
     items: stored.map(toResponseRecord),
   });
 }

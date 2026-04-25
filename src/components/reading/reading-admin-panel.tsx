@@ -46,6 +46,8 @@ export function ReadingAdminPanel() {
   const [mergedImports, setMergedImports] = useState<ReadingImportedTestPackage[]>([]);
   const [copiedState, setCopiedState] = useState<"answer" | "passage" | "merged" | null>(null);
   const [mergeSaved, setMergeSaved] = useState(false);
+  const [remoteState, setRemoteState] = useState<"idle" | "ok" | "error">("idle");
+  const [remoteMessage, setRemoteMessage] = useState("");
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -82,6 +84,29 @@ export function ReadingAdminPanel() {
       setHydrated(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/admin/reading/imports", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { items?: ReadingImportedTestPackage[] };
+        const remoteImports = payload.items ?? [];
+        if (remoteImports.length > 0) {
+          setMergedImports(
+            remoteImports.map((item) => ({
+              ...item,
+              passageSlots: normalizeImportedSlots(item),
+            })),
+          );
+        }
+      } catch {
+        // Keep local browser copy if remote fetch fails.
+      }
+    })();
+  }, [hydrated]);
 
   useEffect(() => {
     if (!hydrated || typeof window === "undefined") return;
@@ -193,6 +218,32 @@ export function ReadingAdminPanel() {
     ]);
     setMergeSaved(true);
     setTimeout(() => setMergeSaved(false), 1800);
+  }
+
+  async function handleSaveMergedPackageToSupabase() {
+    if (!mergedPackage) return;
+
+    setRemoteState("idle");
+    setRemoteMessage("");
+
+    try {
+      const response = await fetch("/api/admin/reading/imports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packages: [mergedPackage] }),
+      });
+
+      const payload = (await response.json()) as { error?: string; savedCount?: number };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to save reading package.");
+      }
+
+      setRemoteState("ok");
+      setRemoteMessage(`${payload.savedCount ?? 0} reading package saved to Supabase.`);
+    } catch (error) {
+      setRemoteState("error");
+      setRemoteMessage(error instanceof Error ? error.message : "Failed to save reading package.");
+    }
   }
 
   function handleResetDrafts() {
@@ -560,10 +611,18 @@ export function ReadingAdminPanel() {
               >
                 Save merged package
               </button>
+              <button
+                type="button"
+                className="action-button"
+                onClick={() => void handleSaveMergedPackageToSupabase()}
+              >
+                Save to Supabase
+              </button>
               <button type="button" className="action-button" onClick={handleResetDrafts}>
                 Clear drafts
               </button>
             </div>
+            {remoteMessage ? <p className={remoteState === "error" ? "meta" : "panel-kicker"}>{remoteMessage}</p> : null}
           </>
         )}
       </article>

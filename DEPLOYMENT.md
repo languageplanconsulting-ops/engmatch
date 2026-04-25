@@ -25,6 +25,8 @@ Add these in Vercel for `Production` and `Preview`:
 Optional:
 
 - `DEEPGRAM_API_KEY`
+- `OPENAI_API_KEY` or `CHATGPT_API_KEY`
+- `ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`
 - `GEMINI_API_KEY`
 - `DEMO_USER_ID`
 

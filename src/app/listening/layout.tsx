@@ -1,5 +1,5 @@
-import { SectionLayout } from "@/lib/page-builders";
+import { StudentAccessGuard } from "@/components/student-access-guard";
 
 export default function ListeningLayout({ children }: LayoutProps<"/listening">) {
-  return <SectionLayout section="Listening">{children}</SectionLayout>;
+  return <StudentAccessGuard skill="listening">{children}</StudentAccessGuard>;
 }

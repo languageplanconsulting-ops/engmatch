@@ -2,11 +2,25 @@ import Link from "next/link";
 
 const ADMIN_SECTIONS = [
   {
-    href: "/admin/speaking",
-    icon: "🎙️",
-    title: "Speaking Upload",
-    desc: "Upload Part 1, Part 2, and Part 3 question packs. Generate AI examiner voice per question.",
+    href: "/admin/analytics",
+    icon: "📈",
+    title: "Business Analytics",
+    desc: "Track monthly AI API calls and estimated provider costs.",
     badge: "New",
+  },
+  {
+    href: "/admin/access",
+    icon: "🔐",
+    title: "Student Access",
+    desc: "Grant access by email, adjust expiry dates, and send student notifications.",
+    badge: "New",
+  },
+  {
+    href: "/admin/speaking",
+    icon: "🗣️",
+    title: "Speaking Admin",
+    desc: "Upload speaking packs, review submissions, and validate AI feedback with audio playback.",
+    badge: "Rebuilt",
   },
   {
     href: "/admin/writing",

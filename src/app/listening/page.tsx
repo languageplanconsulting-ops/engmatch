@@ -1,32 +1,31 @@
-import { demoSets, listeningCategories } from "@/lib/demo-data";
-import { MetricList, PlaceholderPage } from "@/lib/page-builders";
+import Link from "next/link";
+import { getDbListeningSets } from "@/lib/db-content";
+import { demoSets } from "@/lib/demo-data";
 
-export default function ListeningPage() {
+export default async function ListeningPage() {
+  const remoteSets = await getDbListeningSets();
+  const sets = remoteSets.length > 0 ? remoteSets : demoSets.listening;
+
   return (
     <div className="stack-lg">
-      <MetricList
-        items={[
-          { id: "l1", label: "Categories", value: String(listeningCategories.length) },
-          { id: "l2", label: "Practice sets", value: String(demoSets.listening.length) },
-          { id: "l3", label: "Tracked rounds", value: "6" },
-        ]}
-      />
-      <PlaceholderPage
-        title="Listening Lab"
-        description="Explore category drills, round practice, and set results."
-        breadcrumbs={[{ href: "/", label: "Home" }, { label: "Listening" }]}
-        panels={demoSets.listening.map((set) => ({
-          title: set.title,
-          body: `Practice set ${set.id} tuned for ${set.level}.`,
-        }))}
-        links={[
-          ...listeningCategories.map((category) => ({
-            href: `/listening/${category}`,
-            label: `Category: ${category}`,
-          })),
-          { href: "/listening/analytics", label: "Listening analytics" },
-        ]}
-      />
+      <nav className="breadcrumbs" aria-label="Breadcrumb">
+        <span>
+          <Link href="/">Home</Link> /{" "}
+        </span>
+        <span>Listening</span>
+      </nav>
+      <div className="section-header">
+        <h2>Listening Lab</h2>
+        <p>Listening sets uploaded by admin are stored in Supabase and appear here across laptops.</p>
+      </div>
+      <div className="route-grid">
+        {sets.map((set) => (
+          <Link className="route-card" href={`/listening/sets/${set.id}`} key={set.id}>
+            <span>{set.title}</span>
+            <strong>{("level" in set ? set.level : "Ready")}</strong>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }

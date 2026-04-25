@@ -8,8 +8,18 @@ import {
   type SpeakingAnyTest,
   type SpeakingMode,
   type SpeakingTip,
-  type StoredSpeakingPackRecord,
 } from "@/lib/speaking-demo";
+
+type StoredPackWithMetrics = {
+  packId: string;
+  mode: SpeakingMode;
+  name: string;
+  topic: string;
+  uploadedAt: string;
+  lastBand?: number;
+  redeemLabel?: string | null;
+  payload: SpeakingAnyTest;
+};
 
 type Props = { mode: SpeakingMode };
 
@@ -30,7 +40,7 @@ const TIP_COLORS: Record<SpeakingTip["type"], { bg: string; color: string }> = {
   pattern: { bg: "#fef9c3", color: "#854d0e" },
 };
 
-function TestCard({ test, mode }: { test: SpeakingAnyTest; mode: SpeakingMode }) {
+function TestCard({ test, mode, lastBand }: { test: SpeakingAnyTest; mode: SpeakingMode; lastBand?: number }) {
   const [expanded, setExpanded] = useState(false);
   const questions = getQuestions(test);
   const tips = getTips(test);
@@ -45,6 +55,8 @@ function TestCard({ test, mode }: { test: SpeakingAnyTest; mode: SpeakingMode })
           <h3 className="sp-browser-name">{test.name}</h3>
         </div>
         <div className="sp-browser-meta-col">
+          <span className="sp-browser-meta-chip">Band {(lastBand ?? 0).toFixed(1)}</span>
+          {(lastBand ?? 0) < 9 && <span className="sp-browser-meta-chip">Redeem</span>}
           <span className="sp-browser-meta-chip">{questions.length} questions</span>
           <span className="sp-browser-meta-chip">{test.uploadedAt}</span>
         </div>
@@ -96,7 +108,7 @@ function TestCard({ test, mode }: { test: SpeakingAnyTest; mode: SpeakingMode })
           href={`/speaking/${mode}/${test.id}`}
           className="sp-browser-open-btn"
         >
-          Open test →
+          Start →
         </Link>
       </div>
     </article>
@@ -105,6 +117,7 @@ function TestCard({ test, mode }: { test: SpeakingAnyTest; mode: SpeakingMode })
 
 export function SpeakingTestBrowser({ mode }: Props) {
   const [tests, setTests] = useState<SpeakingAnyTest[]>([]);
+  const [bandsByPack, setBandsByPack] = useState<Record<string, number>>({});
 
   useEffect(() => {
     async function load() {
@@ -113,8 +126,14 @@ export function SpeakingTestBrowser({ mode }: Props) {
         setTests(mergeSpeakingTests(mode, []));
         return;
       }
-      const data = (await res.json()) as { items?: StoredSpeakingPackRecord[] };
-      setTests(mergeSpeakingTests(mode, data.items ?? []));
+      const data = (await res.json()) as { items?: StoredPackWithMetrics[] };
+      const items = data.items ?? [];
+      setTests(mergeSpeakingTests(mode, items));
+      const scoreMap: Record<string, number> = {};
+      for (const item of items) {
+        scoreMap[item.packId] = item.lastBand ?? 0;
+      }
+      setBandsByPack(scoreMap);
     }
 
     void load();
@@ -148,7 +167,7 @@ export function SpeakingTestBrowser({ mode }: Props) {
       ) : (
         <div className="sp-browser-grid">
           {tests.map((test) => (
-            <TestCard key={test.id} test={test} mode={mode} />
+            <TestCard key={test.id} test={test} mode={mode} lastBand={bandsByPack[test.id] ?? 0} />
           ))}
         </div>
       )}

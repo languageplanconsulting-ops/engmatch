@@ -1,14 +1,17 @@
 import Link from "next/link";
+import { getDbWritingPrompts } from "@/lib/db-content";
 import { getWritingTaskLabel, writingExamBundle, writingPrompts, type WritingTaskSlug } from "@/lib/writing-demo";
 
 export default async function WritingTaskPage(props: PageProps<"/writing/[task]">) {
   const { task } = await props.params;
   const typedTask = task as WritingTaskSlug;
+  const remotePrompts = await getDbWritingPrompts();
+  const promptSource = remotePrompts.length > 0 ? remotePrompts : writingPrompts;
 
   const prompts =
     typedTask === "full-exam"
-      ? writingPrompts.filter((prompt) => writingExamBundle.promptIds.includes(prompt.id))
-      : writingPrompts.filter((prompt) => prompt.task === typedTask);
+      ? promptSource.filter((prompt) => writingExamBundle.promptIds.includes(prompt.id))
+      : promptSource.filter((prompt) => prompt.task === typedTask);
 
   return (
     <section className="simple-question-list">

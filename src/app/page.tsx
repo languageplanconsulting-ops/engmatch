@@ -1,5 +1,10 @@
-import { HomeDashboard } from "@/components/home-dashboard";
+import { Suspense } from "react";
+import { HomeLanding } from "@/components/home-landing";
 
 export default function HomePage() {
-  return <HomeDashboard />;
+  return (
+    <Suspense fallback={null}>
+      <HomeLanding />
+    </Suspense>
+  );
 }

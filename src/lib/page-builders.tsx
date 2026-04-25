@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 type Breadcrumb = {
@@ -29,6 +32,13 @@ export function AppShell({
 }: {
   children: ReactNode;
 }) {
+  const pathname = usePathname();
+  const isHomePage = pathname === "/";
+
+  if (isHomePage) {
+    return <main>{children}</main>;
+  }
+
   return (
     <div className="shell">
       <header className="topbar">

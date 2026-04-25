@@ -35,11 +35,11 @@ export const skillCards: FeatureCard[] = [
   },
   {
     href: "/speaking",
-    eyebrow: "Fluency coaching",
+    eyebrow: "Interview fluency",
     title: "Speaking Coach",
     description:
-      "Explore part-based prompts, simulated rounds, and feedback-ready sessions that can later connect to live audio services.",
-    stats: ["Parts 1-3", "Session pages", "Admin report settings"],
+      "Run part 1/2/3 packs in mock, practice, or intensive mode with live transcript and AI feedback.",
+    stats: ["Part 1/2/3", "Mock + intensive", "Band tracking"],
   },
   {
     href: "/writing",
@@ -89,11 +89,11 @@ export const adminCards: FeatureCard[] = [
   },
   {
     href: "/admin/speaking",
-    eyebrow: "Prompt ops",
+    eyebrow: "Speaking ops",
     title: "Speaking Admin",
     description:
-      "Tune round settings, topic availability, and report prompts for speaking evaluations.",
-    stats: ["Topic bank", "Round setup", "Report config"],
+      "Bulk upload speaking packs, review student submissions, and validate AI reports after listening to audio.",
+    stats: ["JSON bulk upload", "Validation queue", "Audio review"],
   },
   {
     href: "/admin/writing",
@@ -169,13 +169,6 @@ export const apiPreviews: ApiPreview[] = [
     method: "GET",
     path: "/api/reading/analytics",
     summary: "Summarizes practice accuracy and time-per-question trends.",
-  },
-  {
-    id: "speaking-topics",
-    label: "Speaking topics",
-    method: "GET",
-    path: "/api/speaking/topics",
-    summary: "Provides speaking prompt topics.",
   },
   {
     id: "writing-submissions",

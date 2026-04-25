@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
-import { notifications } from "@/lib/demo-data";
+import { prisma } from "@/lib/prisma";
+import { getStudentSessionEmail } from "@/lib/student-access";
 
 export async function GET() {
-  return NextResponse.json({ items: notifications });
+  const email = await getStudentSessionEmail();
+  if (!email) {
+    return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+  }
+
+  const items = await prisma.studentNotification.findMany({
+    where: { email },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return NextResponse.json({ items });
 }

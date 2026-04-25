@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getDbWritingPrompt } from "@/lib/db-content";
 import { getWritingPrompt } from "@/lib/writing-demo";
 
 export async function GET(
@@ -6,7 +7,7 @@ export async function GET(
   context: RouteContext<"/api/writing/prompts/[promptId]">,
 ) {
   const { promptId } = await context.params;
-  const prompt = getWritingPrompt(promptId);
+  const prompt = (await getDbWritingPrompt(promptId)) ?? getWritingPrompt(promptId);
   return NextResponse.json({
     item:
       prompt ?? {

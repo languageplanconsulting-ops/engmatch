@@ -1,28 +1,20 @@
-import { adminQueues } from "@/lib/demo-data";
-import { MetricList, PlaceholderPage } from "@/lib/page-builders";
+import Link from "next/link";
+import { ListeningAdminPanel } from "@/components/listening/listening-admin-panel";
 
 export default function AdminListeningPage() {
   return (
     <div className="stack-lg">
-      <MetricList items={adminQueues.listening} />
-      <PlaceholderPage
-        title="Admin Listening"
-        description="Recovered admin surface for listening content operations."
-        breadcrumbs={[
-          { href: "/", label: "Home" },
-          { label: "Admin Listening" },
-        ]}
-        panels={[
-          {
-            title: "Publishing queue",
-            body: "Use this route for set management, audio QA status, and release scheduling.",
-          },
-        ]}
-        links={[
-          { href: "/api/admin/listening/sets", label: "Admin listening sets API" },
-          { href: "/listening", label: "Open learner listening view" },
-        ]}
-      />
+      <nav className="breadcrumbs" aria-label="Breadcrumb">
+        <span>
+          <Link href="/">Home</Link> /{" "}
+        </span>
+        <span>Admin Listening</span>
+      </nav>
+      <div className="section-header">
+        <h2>Listening Admin</h2>
+        <p>Upload listening sets to Supabase so they are available across laptops and in production.</p>
+      </div>
+      <ListeningAdminPanel />
     </div>
   );
 }

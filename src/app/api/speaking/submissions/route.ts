@@ -150,6 +150,33 @@ export async function POST(req: Request) {
   });
   const assessRes = await assessSpeaking(assessReq);
   const aiReport = (await assessRes.json()) as Prisma.InputJsonValue;
+  const reportObj = aiReport && typeof aiReport === "object" ? (aiReport as Record<string, unknown>) : null;
+  if (!assessRes.ok) {
+    const message =
+      typeof reportObj?.error === "string"
+        ? reportObj.error
+        : "Speaking assessment failed before a report could be created.";
+    return NextResponse.json(
+      {
+        error: message,
+        providerFailures: Array.isArray(reportObj?.providerFailures) ? reportObj.providerFailures : [],
+        providerDiagnostics: Array.isArray(reportObj?.providerDiagnostics) ? reportObj.providerDiagnostics : [],
+      },
+      { status: assessRes.status || 502 },
+    );
+  }
+  if (reportObj?.errorCode === "fallback") {
+    return NextResponse.json(
+      {
+        error:
+          "Speaking assessment only produced a fallback estimate, so the report was not saved. Fix the AI provider configuration and try again.",
+        fallbackReason: typeof reportObj.fallbackReason === "string" ? reportObj.fallbackReason : null,
+        providerFailures: Array.isArray(reportObj.providerFailures) ? reportObj.providerFailures : [],
+        attemptedProviders: Array.isArray(reportObj.attemptedProviders) ? reportObj.attemptedProviders : [],
+      },
+      { status: 502 },
+    );
+  }
   const overallBand = (() => {
     if (!aiReport || typeof aiReport !== "object") return 0;
     const overall = (aiReport as Record<string, unknown>).overall;
@@ -205,8 +232,8 @@ export async function POST(req: Request) {
       overallBand: Number.isFinite(overallBand) ? overallBand : null,
       status: "ai_ready",
       feedbackReadyAt: new Date(),
-      feedbackProvider: "openai",
-      feedbackModel: process.env.OPENAI_SPEAKING_MODEL ?? "gpt-4o-mini",
+      feedbackProvider: typeof reportObj?.feedbackSource === "string" ? reportObj.feedbackSource : null,
+      feedbackModel: typeof reportObj?.feedbackModel === "string" ? reportObj.feedbackModel : null,
     },
   });
 

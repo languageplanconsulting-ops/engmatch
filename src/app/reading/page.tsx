@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ReadingLibraryClient } from "@/components/reading/reading-runtime";
+import { ReadingDbLibrary } from "@/components/reading/reading-db-library";
 
 export default function ReadingPage() {
   return (
@@ -10,8 +10,7 @@ export default function ReadingPage() {
         </span>
         <span>Reading</span>
       </nav>
-
-      <ReadingLibraryClient />
+      <ReadingDbLibrary />
     </div>
   );
 }

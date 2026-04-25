@@ -16,12 +16,140 @@ model DemoUser {
   updatedAt DateTime @updatedAt
 }
 
+model StudentAccessGrant {
+  id               String                @id @default(cuid())
+  email            String                @unique
+  expiresAt        DateTime
+  speakingEnabled  Boolean               @default(true)
+  readingEnabled   Boolean               @default(true)
+  listeningEnabled Boolean               @default(true)
+  writingEnabled   Boolean               @default(true)
+  notifications    StudentNotification[]
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+}
+
+model StudentNotification {
+  id          String             @id @default(cuid())
+  email       String
+  title       String
+  description String
+  category    String             @default("system")
+  createdAt   DateTime           @default(now())
+  accessId    String?
+  access      StudentAccessGrant? @relation(fields: [accessId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt])
+}
+
 model SpeakingPack {
   id         String   @id @default(cuid())
   packId     String   @unique
   mode       String
+  part       String
   name       String
   topic      String
+  questionCount Int
+  uploadedAt DateTime
+  payload    Json
+  attempts   SpeakingAttempt[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([part, uploadedAt])
+}
+
+model SpeakingSubmission {
+  id          String   @id @default(cuid())
+  attemptId   String
+  attempt     SpeakingAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId  String
+  prompt      String
+  transcript  String
+  audioUrl    String?
+  aiReport    Json?
+  overallBand Float?
+  status      String   @default("pending_ai")
+  feedbackProvider String?
+  feedbackModel String?
+  feedbackReadyAt DateTime?
+  validatedAt DateTime?
+  mistakes    SpeakingMistake[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([attemptId, createdAt])
+  @@index([status, createdAt])
+}
+
+model SpeakingAttempt {
+  id          String   @id @default(cuid())
+  packId      String
+  pack        SpeakingPack @relation(fields: [packId], references: [packId], onDelete: Restrict)
+  mode        String
+  status      String   @default("in_progress")
+  currentBand Float?
+  bestBand    Float?
+  redeemed    Boolean  @default(false)
+  maxRounds   Int      @default(3)
+  submissions SpeakingSubmission[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([packId, createdAt])
+}
+
+model SpeakingMistake {
+  id            String   @id @default(cuid())
+  submissionId  String
+  submission    SpeakingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  category      String
+  phrase        String
+  issue         String
+  suggestion    String
+  createdAt     DateTime @default(now())
+
+  @@index([submissionId, category])
+}
+
+model AiUsageEvent {
+  id               String   @id @default(cuid())
+  feature          String
+  endpoint         String
+  provider         String
+  model            String
+  success          Boolean
+  estimatedCostUsd Float    @default(0)
+  latencyMs        Int?
+  errorCode        String?
+  createdAt        DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@index([provider, createdAt])
+}
+
+model ReadingImportPackage {
+  id         String   @id
+  exam       String
+  importedAt DateTime
+  payload    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model ListeningSetRecord {
+  id         String   @id
+  title      String
+  level      String
+  payload    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model WritingPromptRecord {
+  id         String   @id
+  task       String
+  title      String
   uploadedAt DateTime
   payload    Json
   createdAt  DateTime @default(now())

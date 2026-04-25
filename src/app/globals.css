@@ -3022,6 +3022,182 @@ mark.reading-user-highlight {
   margin-bottom: 14px;
 }
 
+/* Admin speaking system health */
+.sp-admin-health {
+  border: 2px solid var(--border);
+  background: var(--paper-2);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sp-admin-health-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sp-admin-health-head h3 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+}
+
+.sp-admin-health-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-2);
+  line-height: 1.55;
+  max-width: 52rem;
+}
+
+.sp-admin-health-btn {
+  padding: 10px 18px;
+  font-weight: 800;
+  font-size: 0.88rem;
+  border: 3px solid var(--text);
+  background: var(--text);
+  color: var(--paper);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sp-admin-health-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.sp-admin-health-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sp-admin-health-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  border: 2px solid var(--border);
+  font-size: 0.88rem;
+}
+
+.sp-admin-health-summary.is-ok {
+  background: #dcfce7;
+  border-color: #16a34a;
+}
+
+.sp-admin-health-summary.is-bad {
+  background: #fee2e2;
+  border-color: #ef4444;
+}
+
+.sp-admin-health-summary span {
+  color: var(--text-2);
+  font-size: 0.82rem;
+}
+
+.sp-admin-health-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sp-admin-health-item {
+  padding: 12px 14px;
+  border: 2px solid var(--border);
+  background: var(--paper);
+}
+
+.sp-admin-health-item.is-fail {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+
+.sp-admin-health-item-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sp-admin-health-label {
+  font-weight: 800;
+  font-size: 0.88rem;
+}
+
+.sp-admin-health-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sp-admin-health-tag {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border: 2px solid var(--border);
+  background: var(--paper-2);
+}
+
+.sp-admin-health-tag.is-ok {
+  border-color: #16a34a;
+  color: #166534;
+  background: #dcfce7;
+}
+
+.sp-admin-health-tag.is-bad {
+  border-color: #ef4444;
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.sp-admin-health-tag.is-muted {
+  border-color: #cbd5e1;
+  color: #64748b;
+}
+
+.sp-admin-health-tag.is-ai {
+  border-color: #1d4ed8;
+  color: #1e3a8a;
+  background: #dbeafe;
+}
+
+.sp-admin-health-tag.is-warn {
+  border-color: #ca8a04;
+  color: #854d0e;
+  background: #fef9c3;
+}
+
+.sp-admin-health-detail {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.sp-admin-health-ms {
+  margin: 4px 0 0;
+  font-size: 0.76rem;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+
+.sp-admin-health-foot {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
 .speaking-provider-list {
   display: grid;
   gap: 10px;

@@ -23,6 +23,10 @@ export default function SpeakingPage() {
             <strong>Open</strong>
           </Link>
         ))}
+        <Link className="route-card speaking-mode-card" href="/speaking/report">
+          <span>Submit Speaking Report (Text + Audio)</span>
+          <strong>Open</strong>
+        </Link>
       </div>
     </section>
   );
