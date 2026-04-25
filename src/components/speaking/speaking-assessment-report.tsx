@@ -205,6 +205,14 @@ export function SpeakingAssessmentReport({
   if (!result) return null;
 
   const { reportCard } = result;
+  const feedbackModelLabel =
+    result.errorCode === "local_rubric" || !result.feedbackSource
+      ? "English Plan Rubric Engine"
+      : result.feedbackSource === "gemini"
+        ? "Gemini"
+        : result.feedbackSource === "anthropic"
+          ? "Claude"
+          : "ChatGPT";
 
   return (
     <div className="space-y-6 rounded-[32px] border border-slate-200 bg-[radial-gradient(circle_at_top,#eff6ff_0%,#ffffff_38%,#f8fafc_100%)] p-4 shadow-sm md:p-6">
@@ -214,7 +222,9 @@ export function SpeakingAssessmentReport({
             <div className="max-w-3xl">
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#ffcc00]">Speaking Report</p>
               <p className="mt-2 text-2xl font-semibold leading-tight">{reportCard.topicName}</p>
-              <p className="mt-2 text-sm text-blue-100">รายงานประเมินการพูดแบบ bilingual bucket-list</p>
+              <p className="mt-2 text-sm text-blue-100">
+                {`รายงานประเมินการพูดแบบ bilingual bucket-list · ${feedbackModelLabel}${result.feedbackModel ? ` (${result.feedbackModel})` : ""}`}
+              </p>
             </div>
             <div className="rounded-[24px] bg-[#ffcc00] px-5 py-4 text-slate-900 shadow-md">
               <p className="text-xs font-semibold uppercase tracking-[0.2em]">Final Overall Band</p>

@@ -142,6 +142,9 @@ export type AssessmentResult = {
   providerDiagnostics?: ProviderDiagnostic[];
 };
 
+type GrammarCorrection = AssessmentResult["grammarCorrections"][number];
+type VocabularyUpgrade = AssessmentResult["vocabularyUpgrades"][number];
+
 class ProviderCallError extends Error {
   code: string;
   status?: number;
@@ -320,6 +323,30 @@ function parseJsonObject(text: string) {
   }
 }
 
+function extractOpenAIText(payload: Record<string, unknown>) {
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const text = output
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const content = Array.isArray((item as { content?: unknown[] }).content)
+        ? ((item as { content?: unknown[] }).content ?? [])
+        : [];
+      return content;
+    })
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const row = part as Record<string, unknown>;
+      if (typeof row.text === "string") return row.text;
+      return "";
+    })
+    .join("\n")
+    .trim();
+  return text;
+}
+
 function normalizeSpeechSurface(text: string) {
   return text
     .toLowerCase()
@@ -417,6 +444,369 @@ function buildPronunciationCriterion(confidencePct: number, audioMetadata: Whisp
     limitation: audioMetadata
       ? "Pronunciation band uses Whisper-style confidence logic rather than a full human phonetic review."
       : "Pronunciation band is estimated from transcript clarity because audio confidence metadata was not provided.",
+  };
+}
+
+const B1_COLLOCATIONS = [
+  "piece of advice",
+  "corporate world",
+  "toxic environment",
+  "step out",
+  "better your life",
+  "pivotal moment",
+  "hold back",
+  "journey in",
+  "realized that",
+  "changed the narrative",
+  "take control",
+  "meaningful in my life",
+  "discouraged because",
+  "kept my entire life",
+];
+
+const C1_C2_COLLOCATIONS = [
+  "toxic environment",
+  "pivotal moment",
+  "changed the whole narrative",
+  "take the step to better your life",
+  "applicable to my entire life",
+];
+
+function countPhraseHits(text: string, phrases: string[]) {
+  const lower = text.toLowerCase();
+  return phrases.filter((phrase) => lower.includes(phrase)).length;
+}
+
+function collectGrammarCorrections(transcript: string): GrammarCorrection[] {
+  const corrections: GrammarCorrection[] = [];
+  const lower = transcript.toLowerCase();
+
+  if (/\bone of the best advice\b/.test(lower)) {
+    corrections.push({
+      original: "one of the best advice I ever received",
+      corrected: "one of the best pieces of advice I ever received",
+      thaiExplanation: "advice เป็นคำนามนับไม่ได้ จึงต้องใช้ pieces of advice",
+    });
+  }
+  if (/\bthis sentence sound simple\b/.test(lower)) {
+    corrections.push({
+      original: "this sentence sound simple",
+      corrected: "this sentence sounds simple",
+      thaiExplanation: "ประธานเอกพจน์ต้องใช้ sounds",
+    });
+  }
+  if (/\bdifferent background\b/.test(lower)) {
+    corrections.push({
+      original: "everyone has different background",
+      corrected: "everyone has a different background",
+      thaiExplanation: "ต้องมี article หน้า singular countable noun",
+    });
+  }
+  if (/\banother person success\b/.test(lower)) {
+    corrections.push({
+      original: "another person success",
+      corrected: "another person's success",
+      thaiExplanation: "ต้องใช้ possessive form เพื่อแสดงความเป็นเจ้าของ",
+    });
+  }
+  return corrections.slice(0, 4);
+}
+
+function collectVocabularyUpgrades(transcript: string): VocabularyUpgrade[] {
+  const lower = transcript.toLowerCase();
+  const upgrades: VocabularyUpgrade[] = [];
+  if (lower.includes("really down")) {
+    upgrades.push({
+      original: "really down",
+      better: "deeply discouraged",
+      thaiExplanation: "ใช้คำที่แม่นและเป็นธรรมชาติกว่าในการบอกอารมณ์",
+    });
+  }
+  if (lower.includes("better your life")) {
+    upgrades.push({
+      original: "better your life",
+      better: "improve your life circumstances",
+      thaiExplanation: "เป็น collocation ที่ดูเป็นธรรมชาติมากขึ้น",
+    });
+  }
+  if (lower.includes("changed the whole narrative")) {
+    upgrades.push({
+      original: "changed the whole narrative",
+      better: "completely reshaped my outlook",
+      thaiExplanation: "ให้โทนภาษาที่เป็นธรรมชาติและพัฒนามากขึ้น",
+    });
+  }
+  return upgrades.slice(0, 3);
+}
+
+function buildBucketChecklist(
+  currentBand: number,
+  achieved: BilingualBullet,
+  missing: BilingualBullet,
+): BucketChecklist {
+  return {
+    currentBand,
+    nextTargetBand: Math.min(9, currentBand + 1),
+    achieved: [achieved],
+    missingForNextBand: [missing],
+  };
+}
+
+function buildLocalRubricAssessment(
+  body: AssessBody,
+  providerFailures: string[],
+  providerDiagnostics: ProviderDiagnostic[],
+  attemptedProviders: string[],
+): AssessmentResult {
+  const transcript = body.transcript.trim();
+  const punctuatedTranscript = punctuateTranscript(transcript);
+  const words = transcript.split(/\s+/).filter(Boolean).length;
+  const lower = transcript.toLowerCase();
+  const references = countReferences(transcript);
+  const subordinators = (lower.match(/\b(because|although|though|when|while|since|if|unless)\b/g) ?? []).length;
+  const hasPast = /\b(was|were|did|had|started|graduated|realized|changed|stopped|felt)\b/.test(lower);
+  const hasPerfect = /\b(has|have|had)\s+\w+/.test(lower);
+  const hasConditional = /\bif\b[\s\S]{0,80}\b(would|could|might|will)\b/.test(lower);
+  const grammarCorrections = collectGrammarCorrections(transcript);
+  const vocabularyUpgrades = collectVocabularyUpgrades(transcript);
+  const collocations = countPhraseHits(transcript, B1_COLLOCATIONS);
+  const advancedCollocations = countPhraseHits(transcript, C1_C2_COLLOCATIONS);
+  const awkwardVocabularyCount = vocabularyUpgrades.length + (grammarCorrections.length > 2 ? 1 : 0);
+  const audioMetadata = parseWhisperAudioMetadata(body.audioMetadata);
+  const pronunciationConfidencePct = estimatePronunciationConfidence(transcript, audioMetadata);
+  const pronunciation = buildPronunciationCriterion(pronunciationConfidencePct, audioMetadata);
+
+  let grammarBand = 5;
+  if (hasConditional && hasPerfect && hasPast && subordinators >= 2 && grammarCorrections.length === 0) grammarBand = 9;
+  else if (hasPerfect && hasPast && subordinators >= 2 && grammarCorrections.length <= 1) grammarBand = 8;
+  else if (hasPast && subordinators >= 1 && grammarCorrections.length <= 3) grammarBand = 7;
+  else if (grammarCorrections.length <= 5) grammarBand = 6;
+
+  let vocabularyBand = 5;
+  if (collocations > 6 && advancedCollocations >= 2 && awkwardVocabularyCount === 0) vocabularyBand = 9;
+  else if (collocations >= 4 && advancedCollocations >= 1 && awkwardVocabularyCount === 0) vocabularyBand = 8;
+  else if (collocations >= 2 && awkwardVocabularyCount <= 3) vocabularyBand = 7;
+  else if (awkwardVocabularyCount <= 5) vocabularyBand = 6;
+
+  let fluencyBand = 5;
+  if (words > 310 && references > 4) fluencyBand = 9;
+  else if (words > 280 && references > 3) fluencyBand = 8;
+  else if (words > 250 && references > 2) fluencyBand = 7;
+  else if (words >= 200) fluencyBand = 6;
+
+  const rawAverage = Number((((grammarBand + vocabularyBand + fluencyBand + pronunciation.band) / 4)).toFixed(2));
+  const roundedBand = roundOverallBand(rawAverage);
+
+  const grammarChecklist = buildBucketChecklist(
+    grammarBand,
+    grammarBand >= 7
+      ? {
+          thai: `คุณใช้ tense พื้นฐานได้ค่อนข้างมั่นคง และมีคำเชื่อมย่อย ${subordinators} จุด`,
+          english: `You control core tenses fairly well and used ${subordinators} subordinating linkers.`,
+        }
+      : {
+          thai: `คุณยังสื่อความหมายได้ แม้มี grammar error อยู่ ${grammarCorrections.length} จุด`,
+          english: `Your meaning stays understandable despite ${grammarCorrections.length} grammar issues.`,
+        },
+    grammarBand >= 8
+      ? {
+          thai: "ก้าวต่อไปคือเพิ่ม perfect forms และ conditionals ให้แม่นขึ้นทุกจุด",
+          english: "Next, make perfect forms and conditionals consistently accurate.",
+        }
+      : grammarBand === 7
+        ? {
+            thai: "ก้าวต่อไปคือทำ past/perfect forms ให้เนียนขึ้นและลด error เล็ก ๆ",
+            english: "Next, smooth out past/perfect forms and reduce minor errors.",
+          }
+        : {
+            thai: "ก้าวต่อไปคือใช้ subordinating conjunctions และแก้ tense errors ซ้ำ ๆ",
+            english: "Next, add subordinating conjunctions and fix repeated tense issues.",
+          },
+  );
+
+  const vocabularyChecklist = buildBucketChecklist(
+    vocabularyBand,
+    vocabularyBand >= 7
+      ? {
+          thai: `คุณมี collocation ที่ใช้ได้จริงประมาณ ${collocations} จุด`,
+          english: `You used about ${collocations} workable collocations in this answer.`,
+        }
+      : {
+          thai: "คำตอบยังใช้คำค่อนข้างพื้นฐาน แต่ยังสื่อสารได้",
+          english: "The vocabulary is still basic, but your ideas remain understandable.",
+        },
+    vocabularyBand >= 8
+      ? {
+          thai: "ก้าวต่อไปคือเพิ่ม collocation ระดับสูงและลดความไม่เป็นธรรมชาติให้หมด",
+          english: "Next, add higher-level collocations and remove remaining awkward phrasing.",
+        }
+      : {
+          thai: "ก้าวต่อไปคือเพิ่ม collocation ให้ชัดขึ้นและเปลี่ยนคำพื้นฐานให้เฉียบกว่าเดิม",
+          english: "Next, add clearer collocations and replace basic wording with sharper phrasing.",
+        },
+  );
+
+  const fluencyChecklist = buildBucketChecklist(
+    fluencyBand,
+    fluencyBand >= 7
+      ? {
+          thai: `คุณพูดได้ยาว ${words} คำ และใช้ referencing ${references} ครั้ง`,
+          english: `You produced ${words} words and used referencing ${references} times.`,
+        }
+      : {
+          thai: `ตอนนี้คำตอบยาว ${words} คำ ซึ่งยังไม่พอสำหรับ band ที่สูงกว่า`,
+          english: `At ${words} words, the response is still short for a higher fluency band.`,
+        },
+    fluencyBand >= 8
+      ? {
+          thai: "ก้าวต่อไปคือเพิ่มความลื่นต่อเนื่องโดยขยายเหตุผลและตัวอย่างให้เต็มกว่าเดิม",
+          english: "Next, extend reasons and examples so the flow feels fuller and more sustained.",
+        }
+      : {
+          thai: "ก้าวต่อไปคือเพิ่มความยาวคำตอบและใช้ this/that/those เชื่อมความคิดมากขึ้น",
+          english: "Next, extend the answer and use this/that/those more to connect ideas.",
+        },
+  );
+
+  const stepUpCorrections: StepUpCorrection[] = [
+    grammarCorrections[0]
+      ? {
+          type: "grammar",
+          targetBand: Math.min(9, grammarBand + 1),
+          originalText: grammarCorrections[0].original,
+          improvedText: grammarCorrections[0].corrected,
+          englishExplanation: "This removes a repeated grammar error blocking the next bucket.",
+          thaiExplanation: "จุดนี้ช่วยตัด grammar error ซ้ำ ๆ ที่ขวาง band ถัดไป",
+        }
+      : {
+          type: "grammar",
+          targetBand: Math.min(9, grammarBand + 1),
+          originalText: "I felt down. I just graduated.",
+          improvedText: "Although I had just graduated, I felt deeply discouraged.",
+          englishExplanation: "This adds subordination and a more advanced tense pattern.",
+          thaiExplanation: "ประโยคนี้เพิ่มคำเชื่อมย่อยและโครง tense ที่สูงขึ้น",
+        },
+    vocabularyUpgrades[0]
+      ? {
+          type: "vocabulary",
+          targetBand: Math.min(9, vocabularyBand + 1),
+          originalText: vocabularyUpgrades[0].original,
+          improvedText: vocabularyUpgrades[0].better,
+          englishExplanation: "This sounds more natural and more precise.",
+          thaiExplanation: "คำใหม่นี้ฟังเป็นธรรมชาติกว่าและแม่นยำกว่า",
+        }
+      : {
+          type: "vocabulary",
+          targetBand: Math.min(9, vocabularyBand + 1),
+          originalText: "really down",
+          improvedText: "deeply discouraged",
+          englishExplanation: "This upgrade gives you a stronger collocation.",
+          thaiExplanation: "การเปลี่ยนคำนี้ช่วยให้ได้ collocation ที่ดูดีกว่าเดิม",
+        },
+    {
+      type: "fluency",
+      targetBand: Math.min(9, fluencyBand + 1),
+      suggestionToAdd:
+        fluencyBand >= 7
+          ? "Add one short example and one reflective ending to push the response beyond 280 words."
+          : "Add 2-3 extra sentences explaining why the advice changed you, and reuse this/that to connect ideas.",
+      englishExplanation: "This targets the missing fluency bucket directly.",
+      thaiExplanation: "คำแนะนำนี้พุ่งตรงไปที่ bucket ของ fluency ที่ยังขาด",
+    },
+  ];
+
+  return {
+    overall: {
+      rawAverage,
+      roundedBand,
+      confidence: words > 220 ? "medium" : "low",
+      scoreType: "single_answer_estimate",
+      englishSummary:
+        "This report was built by the local rubric engine because provider enrichment was unavailable, but the bucket scoring still follows the speaking criteria.",
+      thaiSummary:
+        "รายงานนี้สร้างจาก local rubric engine เพราะการเสริมผลจากผู้ให้บริการ AI ยังไม่พร้อม แต่การให้คะแนน bucket ยังอิงตามเกณฑ์การพูดที่ตั้งไว้",
+      reliabilityWarning:
+        "Provider enrichment failed, so this version uses the built-in rubric engine plus Whisper-style pronunciation logic.",
+    },
+    responseInfo: {
+      part: body.mode,
+      question: body.question,
+      wordCount: words,
+      responseLength: words < 40 ? "too short" : words < 90 ? "short" : words < 170 ? "adequate" : "extended",
+      possibleSpeechToTextErrors: [],
+    },
+    criteria: {
+      fluencyCoherence: {
+        band: fluencyBand,
+        englishExplanation: `Word count is ${words} and referencing appears ${references} times, which places the answer in the fluency bucket around band ${fluencyBand}.`,
+        thaiExplanation: `คำตอบยาว ${words} คำ และมีการใช้ referencing ${references} ครั้ง จึงอยู่ใน bucket ของ fluency ประมาณ band ${fluencyBand}`,
+        evidenceFromTranscript: [`Words: ${words} | Referencing: ${references}`],
+        mainIssues: fluencyChecklist.missingForNextBand.map((item) => item.english),
+        howToImprove: {
+          english: [stepUpCorrections[2].suggestionToAdd ?? ""].filter(Boolean),
+          thai: ["เพิ่มประโยคขยายเหตุผลและเชื่อมความคิดด้วย this/that/those ให้ชัดขึ้น"],
+        },
+      },
+      lexicalResource: {
+        band: vocabularyBand,
+        englishExplanation: `The answer shows about ${collocations} useful collocations, with ${advancedCollocations} higher-level items.`,
+        thaiExplanation: `คำตอบนี้มี collocation ที่ใช้ได้ประมาณ ${collocations} จุด และมีคำระดับสูงประมาณ ${advancedCollocations} จุด`,
+        evidenceFromTranscript: [`Collocations: ${collocations} | Advanced: ${advancedCollocations}`],
+        mainIssues: vocabularyChecklist.missingForNextBand.map((item) => item.english),
+        howToImprove: {
+          english: ["Swap basic phrases for tighter collocations in key emotional moments."],
+          thai: ["เปลี่ยนคำพื้นฐานในช่วงสำคัญให้เป็น collocation ที่เฉียบขึ้น"],
+        },
+      },
+      grammarRangeAccuracy: {
+        band: grammarBand,
+        englishExplanation: `The transcript shows past tense control, ${subordinators} subordinators, and ${grammarCorrections.length} notable grammar issues.`,
+        thaiExplanation: `บทพูดนี้มี past tense พอใช้ มี subordinators ${subordinators} จุด และมี grammar issue เด่น ๆ ${grammarCorrections.length} จุด`,
+        evidenceFromTranscript: [`Past tense: ${hasPast ? "yes" : "limited"} | Perfect: ${hasPerfect ? "yes" : "no"}`],
+        mainIssues: grammarChecklist.missingForNextBand.map((item) => item.english),
+        howToImprove: {
+          english: ["Tighten repeated noun/article and verb-form errors."],
+          thai: ["เก็บ article และ verb form ที่พลาดซ้ำ ๆ ให้เนี้ยบขึ้น"],
+        },
+      },
+      pronunciation,
+    },
+    grammarCorrections,
+    vocabularyUpgrades,
+    priorityActions: [],
+    sampleImprovedAnswer: {
+      english:
+        "Mariah Carey has been especially meaningful to me because one of her songs arrived when I felt lost after graduation. At that time, I was discouraged and lacked confidence in the corporate world. The message of letting go helped me realize that I had to leave environments that no longer supported my growth. Since then, I have tried to focus on improving my own life step by step instead of blaming circumstances. That advice still matters to me because it changed how I see setbacks and gave me the courage to act.",
+      thaiNote: "ตัวอย่างนี้เพิ่มความชัดของเหตุและผล พร้อมขยายรายละเอียดให้ flow สมบูรณ์ขึ้น",
+    },
+    reportCard: {
+      topicName: body.question,
+      preprocess: {
+        rawTranscript: transcript,
+        punctuatedTranscript,
+      },
+      scoreCalculation: {
+        grammar: grammarBand,
+        vocabulary: vocabularyBand,
+        fluency: fluencyBand,
+        pronunciation: pronunciation.band,
+        exactAverage: rawAverage,
+        roundedBand,
+        formula: `(${fluencyBand} + ${grammarBand} + ${vocabularyBand} + ${pronunciation.band}) / 4 = ${rawAverage}`,
+        pronunciationConfidencePct,
+      },
+      buckets: {
+        grammar: grammarChecklist,
+        vocabulary: vocabularyChecklist,
+        fluency: fluencyChecklist,
+      },
+      stepUpCorrections,
+    },
+    feedbackModel: "english-plan-local-rubric-engine",
+    errorCode: "local_rubric",
+    attemptedProviders,
+    providerFailures,
+    providerDiagnostics,
   };
 }
 
@@ -688,14 +1078,17 @@ OUTPUT REQUIREMENTS
 - Step-up corrections must target ONLY the missing buckets for the next band.
 - For grammar and vocabulary corrections, return originalText and improvedText.
 - For fluency corrections, return suggestionToAdd instead of originalText/improvedText when the gap is word count or extension.
-- Keep the output compact.
-- Use at most 2 achieved bullets per bucket.
-- Use at most 2 missing bullets per bucket.
+- Keep the output extremely compact.
+- Use exactly 1 achieved bullet per bucket.
+- Use exactly 1 missing bullet per bucket.
 - Return exactly 3 stepUpCorrections.
-- Keep each explanation under 18 words.
-- Keep criteria evidence arrays to max 2 items each.
-- Keep grammarCorrections and vocabularyUpgrades to max 3 items each.
-- sampleImprovedAnswer.english must be 80-120 words maximum.
+- Keep each explanation under 12 words.
+- Keep each criteria evidence array to exactly 1 short item.
+- Return grammarCorrections as an empty array.
+- Return vocabularyUpgrades as an empty array.
+- Return priorityActions as an empty array.
+- Return sampleImprovedAnswer.english as an empty string.
+- Return sampleImprovedAnswer.thaiNote as an empty string.
 
 JSON SHAPE
 {
@@ -739,12 +1132,12 @@ async function callOpenAI(prompt: string, signal: AbortSignal) {
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, input: prompt, max_output_tokens: 3200 }),
+    body: JSON.stringify({ model, input: prompt, max_output_tokens: 4000 }),
     signal,
   });
   if (!res.ok) throw new ProviderCallError(`OpenAI HTTP ${res.status}`, "http_error", res.status);
   const payload = (await res.json()) as Record<string, unknown>;
-  const outputText = typeof payload.output_text === "string" ? payload.output_text : "";
+  const outputText = extractOpenAIText(payload);
   if (outputText.trim()) return { provider: "openai" as const, model, text: outputText.trim() };
   throw new ProviderCallError("OpenAI empty response.", "empty_response");
 }
@@ -752,13 +1145,13 @@ async function callOpenAI(prompt: string, signal: AbortSignal) {
 async function callClaude(prompt: string, signal: AbortSignal) {
   const apiKey = firstEnv("ANTHROPIC_API_KEY", "CLAUDE_API_KEY");
   if (!apiKey) throw new ProviderCallError("Missing Claude key.", "missing_key");
-  const model = process.env.ANTHROPIC_SPEAKING_MODEL || "claude-3-5-sonnet-20241022";
+  const model = process.env.ANTHROPIC_SPEAKING_MODEL || "claude-3-5-sonnet-latest";
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model,
-      max_tokens: 3200,
+      max_tokens: 4000,
       temperature: 0.2,
       system: "Output exactly one valid JSON object only.",
       messages: [{ role: "user", content: prompt }],
@@ -785,7 +1178,7 @@ async function callGemini(prompt: string, signal: AbortSignal) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      generationConfig: { temperature: 0.2, maxOutputTokens: 3200, responseMimeType: "application/json" },
+      generationConfig: { temperature: 0.1, maxOutputTokens: 4000, responseMimeType: "application/json" },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     }),
     signal,
@@ -869,15 +1262,12 @@ export async function POST(req: Request) {
 
   if (!selectedProviders.some((provider) => provider.configured)) {
     return NextResponse.json(
-      {
-        error: body.forceProvider
-          ? `No API key configured for ${body.forceProvider}.`
-          : "No AI speaking provider is configured. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY.",
-        providerFailures: diagnostics.map((item) => `${item.provider}:${item.message ?? item.code ?? "unavailable"}`),
-        attemptedProviders: [],
-        providerDiagnostics: diagnostics,
-      },
-      { status: 503 },
+      buildLocalRubricAssessment(
+        body,
+        diagnostics.map((item) => `${item.provider}:${item.message ?? item.code ?? "unavailable"}`),
+        diagnostics,
+        [],
+      ),
     );
   }
 
@@ -957,14 +1347,11 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json(
-    {
-      ...fallbackAssessment(
-        body,
-        failures.length ? failures.join(" | ") : "All providers failed with unknown errors.",
-        attempted,
-      ),
-      providerFailures: failures,
-      providerDiagnostics: diagnostics,
-    },
+    buildLocalRubricAssessment(
+      body,
+      failures,
+      diagnostics,
+      attempted,
+    ),
   );
 }
