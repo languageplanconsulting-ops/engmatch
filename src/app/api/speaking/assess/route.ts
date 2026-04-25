@@ -1,9 +1,26 @@
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
 type AssessBody = {
   question: string;
   transcript: string;
-  mode: "part-1" | "part-3";
+  mode: "part-1" | "part-2" | "part-3";
+  runtimeMode?: "mock" | "practice" | "intensive";
+  previousOverall?: number;
+};
+
+export type CriterionDetail = {
+  band: number;
+  englishExplanation: string;
+  thaiExplanation: string;
+  evidenceFromTranscript?: string[];
+  evidence?: string[];
+  mainIssues: string[];
+  howToImprove: {
+    english: string[];
+    thai: string[];
+  };
+  limitation?: string;
 };
 
 export type AnnotatedPhrase = {
@@ -13,411 +30,424 @@ export type AnnotatedPhrase = {
   correction: string;
 };
 
-export type CriterionDetail = {
-  score: number;
-  scoreTh: string;
-  scoreEn: string;
-  whyBullets: string[];      // up to 5 — why they got this score
-  improveBullets: string[];  // up to 10 — exact phrase → how to improve
+export type MajorMistake = {
+  category: "grammar" | "vocabulary";
+  phrase: string;
+  issue: string;
+  suggestion: string;
 };
 
 export type AssessmentResult = {
-  /** Punctuated version of the raw transcript (no grammar fixes) */
-  punctuatedTranscript: string;
-  fluency: CriterionDetail;
-  vocabulary: CriterionDetail;
-  grammar: CriterionDetail;
-  pronunciation: CriterionDetail;
-  overall: number;               // rounded to nearest 0.5
-  overallTh: string;
-  overallEn: string;
-  /** Annotated phrases for highlight overlay (colour-coded) */
-  annotations: AnnotatedPhrase[];
-  /** Improved script — spoken-language focus, grammar corrections only */
-  improvedScript: string;
-};
-
-type GeminiCandidate = {
-  content?: {
-    parts?: Array<{ text?: string }>;
+  overall: {
+    rawAverage: number;
+    roundedBand: number;
+    confidence: "low" | "medium" | "high";
+    scoreType: "single_answer_estimate" | "full_test_estimate";
+    englishSummary: string;
+    thaiSummary: string;
+    reliabilityWarning: string;
   };
+  responseInfo: {
+    part: string;
+    question: string;
+    wordCount: number;
+    responseLength: "too short" | "short" | "adequate" | "extended";
+    possibleSpeechToTextErrors: string[];
+  };
+  criteria: {
+    fluencyCoherence: CriterionDetail;
+    lexicalResource: CriterionDetail;
+    grammarRangeAccuracy: CriterionDetail;
+    pronunciation: CriterionDetail;
+  };
+  grammarCorrections: Array<{
+    original: string;
+    corrected: string;
+    thaiExplanation: string;
+  }>;
+  vocabularyUpgrades: Array<{
+    original: string;
+    better: string;
+    thaiExplanation: string;
+  }>;
+  priorityActions: Array<{
+    english: string;
+    thai: string;
+  }>;
+  sampleImprovedAnswer: {
+    english: string;
+    thaiNote: string;
+  };
+  errorCode?: string;
 };
 
-type JsonRecord = Record<string, unknown>;
+function toScore(v: unknown) {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(9, Math.round(n * 2) / 2));
+}
 
-function extractFirstJsonObject(text: string) {
+function parseJsonObject(text: string) {
   const start = text.indexOf("{");
-  if (start === -1) return null;
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === "\"") {
-      inString = true;
-      continue;
-    }
-
-    if (char === "{") {
-      depth += 1;
-      continue;
-    }
-
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, i + 1);
-      }
-    }
-  }
-
-  return null;
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) throw new Error("No JSON object in model output");
+  return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
 }
 
-function cleanJsonCandidate(text: string) {
-  return text
-    .replace(/^\uFEFF/, "")
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/i, "")
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "'")
-    .trim();
-}
-
-function parseJsonWithFallbacks(text: string): unknown {
-  const cleaned = cleanJsonCandidate(text);
-  const candidates = [cleaned];
-  const extracted = extractFirstJsonObject(cleaned);
-
-  if (extracted && extracted !== cleaned) {
-    candidates.push(extracted);
-  }
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Try one more pass for responses that are JSON-stringified JSON.
-      try {
-        const nested = JSON.parse(JSON.stringify(candidate)) as string;
-        return JSON.parse(nested);
-      } catch {
-        // Ignore and continue to the next fallback.
-      }
-    }
-  }
-
-  // If the response is wrapped as a JSON string, decode then parse again.
-  if (
-    (cleaned.startsWith("\"{") && cleaned.endsWith("}\"")) ||
-    (cleaned.startsWith("'{") && cleaned.endsWith("}'"))
-  ) {
-    const normalizedQuoted = cleaned.startsWith("'")
-      ? `"${cleaned.slice(1, -1).replace(/"/g, "\\\"")}"`
-      : cleaned;
-    const decoded = JSON.parse(normalizedQuoted) as string;
-    return JSON.parse(cleanJsonCandidate(decoded));
-  }
-
-  throw new Error("Unable to parse JSON");
-}
-
-function asString(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function asStringArray(value: unknown) {
-  return Array.isArray(value)
-    ? value.map((item) => asString(item)).filter(Boolean)
-    : [];
-}
-
-function asScore(value: unknown) {
-  const numeric = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(numeric)) return 0;
-  return Math.max(0, Math.min(9, Math.round(numeric * 2) / 2));
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
-}
-
-function normalizeCriterion(value: unknown): CriterionDetail {
-  const record = asRecord(value);
-
+function fallbackAssessment(transcript: string, previousOverall: number | undefined): AssessmentResult {
+  const words = transcript.trim().split(/\s+/).filter(Boolean).length;
+  const baseBand = words > 160 ? 6.5 : words > 100 ? 6 : words > 60 ? 5.5 : 5;
+  const roundedBand = toScore(baseBand);
+  const scoreType = "single_answer_estimate" as const;
+  const responseLength: AssessmentResult["responseInfo"]["responseLength"] =
+    words < 20 ? "too short" : words < 50 ? "short" : words < 140 ? "adequate" : "extended";
   return {
-    score: asScore(record.score),
-    scoreTh: asString(record.scoreTh),
-    scoreEn: asString(record.scoreEn),
-    whyBullets: asStringArray(record.whyBullets).slice(0, 5),
-    improveBullets: asStringArray(record.improveBullets).slice(0, 10),
+    overall: {
+      rawAverage: roundedBand,
+      roundedBand,
+      confidence: "low",
+      scoreType,
+      englishSummary: "AI is temporarily unavailable; this is a conservative deterministic estimate.",
+      thaiSummary: "ระบบ AI ไม่พร้อมชั่วคราว จึงแสดงคะแนนประมาณการแบบระมัดระวัง",
+      reliabilityWarning: "Pronunciation is estimated with low confidence because no validated audio analysis is available.",
+    },
+    responseInfo: {
+      part: "",
+      question: "",
+      wordCount: words,
+      responseLength,
+      possibleSpeechToTextErrors: [],
+    },
+    criteria: {
+      fluencyCoherence: {
+        band: roundedBand,
+        englishExplanation: "Temporary estimate based on transcript length and continuity.",
+        thaiExplanation: "คะแนนชั่วคราวจากความยาวคำตอบและความต่อเนื่องของข้อความ",
+        evidenceFromTranscript: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+      },
+      lexicalResource: {
+        band: toScore(roundedBand - 0.5),
+        englishExplanation: "Temporary estimate for vocabulary range and appropriacy.",
+        thaiExplanation: "คะแนนชั่วคราวด้านช่วงคำศัพท์และความเหมาะสมในการใช้คำ",
+        evidenceFromTranscript: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+      },
+      grammarRangeAccuracy: {
+        band: toScore(roundedBand - 0.5),
+        englishExplanation: "Temporary estimate for grammar range and control.",
+        thaiExplanation: "คะแนนชั่วคราวด้านความหลากหลายและความถูกต้องของไวยากรณ์",
+        evidenceFromTranscript: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+      },
+      pronunciation: {
+        band: roundedBand,
+        englishExplanation: "Estimated from transcript only.",
+        thaiExplanation: "ประเมินจากข้อความถอดเสียงเท่านั้น",
+        evidence: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+        limitation: "Audio not available; pronunciation confidence is low.",
+      },
+    },
+    grammarCorrections: [],
+    vocabularyUpgrades: [],
+    priorityActions: [],
+    sampleImprovedAnswer: {
+      english: transcript.trim(),
+      thaiNote: "ตัวอย่างนี้อิงจากคำตอบเดิมเนื่องจากระบบประเมินชั่วคราว",
+    },
+    errorCode: "fallback",
   };
 }
 
-function normalizeAnnotations(value: unknown): AnnotatedPhrase[] {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map((item) => {
-      const record = asRecord(item);
-      const category = asString(record.category);
-      if (!["grammar", "vocabulary", "pronunciation", "coherence"].includes(category)) {
-        return null;
-      }
-
-      return {
-        phrase: asString(record.phrase),
-        category: category as AnnotatedPhrase["category"],
-        issue: asString(record.issue),
-        correction: asString(record.correction),
-      };
-    })
-    .filter((item): item is AnnotatedPhrase => Boolean(item && item.phrase && item.issue))
-    .slice(0, 8);
+async function logUsage(success: boolean, latencyMs: number, errorCode?: string) {
+  try {
+    await prisma.aiUsageEvent.create({
+      data: {
+        feature: "speaking-assessment",
+        endpoint: "/api/speaking/assess",
+        provider: "openai",
+        model: process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini",
+        success,
+        estimatedCostUsd: success ? 0.004 : 0,
+        latencyMs,
+        errorCode: errorCode ?? null,
+      },
+    });
+  } catch {
+    // Ignore analytics failures.
+  }
 }
 
-function averageScores(details: CriterionDetail[]) {
-  const validScores = details.map((detail) => detail.score).filter((score) => score > 0);
-  if (!validScores.length) return 0;
-  const average = validScores.reduce((sum, score) => sum + score, 0) / validScores.length;
-  return Math.round(average * 2) / 2;
-}
-
-function normalizeAssessmentResult(value: unknown): AssessmentResult {
-  const record = asRecord(value);
-  const fluency = normalizeCriterion(record.fluency);
-  const vocabulary = normalizeCriterion(record.vocabulary);
-  const grammar = normalizeCriterion(record.grammar);
-  const pronunciation = normalizeCriterion(record.pronunciation);
-  const overall =
-    asScore(record.overall) || averageScores([fluency, vocabulary, grammar, pronunciation]);
-
-  return {
-    punctuatedTranscript: asString(record.punctuatedTranscript),
-    fluency,
-    vocabulary,
-    grammar,
-    pronunciation,
-    overall,
-    overallTh: asString(record.overallTh),
-    overallEn: asString(record.overallEn),
-    annotations: normalizeAnnotations(record.annotations),
-    improvedScript: asString(record.improvedScript),
-  };
-}
-
-const CRITERIA_RUBRIC = `
-IELTS Speaking Assessment Criteria (Official Band Descriptors)
-
-1. FLUENCY AND COHERENCE
-Band 9: Speaks fluently with only rare hesitation. Ideas are logically organized. Uses cohesive devices naturally.
-Band 8: Mostly fluent, occasional hesitation for content (not language). Well-organized ideas. Uses a wide range of linking devices.
-Band 7: Speaks at length without noticeable effort. Some hesitation or repetition. Uses linking words but may overuse or misuse slightly.
-Band 6: Willing to speak at length. Noticeable hesitation and repetition. Uses basic cohesive devices (and, but, because).
-Band 5: Usually maintains flow but with frequent pauses. Overuses simple connectors. Ideas may lack clear progression.
-Band 4: Frequent hesitation. Limited ability to link ideas. Speech is sometimes difficult to follow.
-
-2. LEXICAL RESOURCE
-Band 9: Uses vocabulary with full flexibility and precision. Natural and accurate idiomatic usage.
-Band 8: Wide vocabulary range. Occasional minor inaccuracies. Good use of paraphrasing.
-Band 7: Sufficient vocabulary for flexibility. Some errors in word choice or collocation. Can paraphrase effectively.
-Band 6: Adequate vocabulary for familiar topics. Limited flexibility. Attempts paraphrasing but with errors.
-Band 5: Limited vocabulary. Frequent repetition. Errors in word choice may cause difficulty.
-Band 4: Very basic vocabulary. Frequent misuse. Cannot paraphrase effectively.
-
-3. GRAMMATICAL RANGE AND ACCURACY
-Band 9: Full range of structures used naturally. Almost no errors.
-Band 8: Wide range of structures. Occasional minor errors.
-Band 7: Uses a mix of simple and complex structures. Some grammatical errors but meaning is clear.
-Band 6: Mix of simple and some complex sentences. Frequent errors, but communication is maintained.
-Band 5: Mostly simple sentences. Frequent grammatical errors. Limited control of structure.
-Band 4: Very limited structures. Errors often cause misunderstanding.
-
-4. PRONUNCIATION
-Band 9: Easy to understand. Uses stress and intonation naturally.
-Band 8: Clear and natural pronunciation. Minor lapses.
-Band 7: Generally clear. Some mispronunciations. Good control of rhythm and intonation.
-Band 6: Understandable overall. Noticeable accent and errors. Limited control of stress/intonation.
-Band 5: Difficult to understand at times. Frequent pronunciation errors.
-Band 4: Hard to understand. Frequent breakdown in communication.
-`;
-
-/**
- * POST /api/speaking/assess
- * Step 1: punctuate the raw transcript (no grammar fixes, just add punctuation).
- * Step 2: assess using the official IELTS rubric with Gemini 2.5 Flash.
- * Returns full bilingual (EN + TH) report with annotations for colour-coded highlights.
- */
 export async function POST(req: Request) {
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "GEMINI_API_KEY is not configured on the server." },
-      { status: 503 },
-    );
-  }
-
   let body: AssessBody;
   try {
     body = (await req.json()) as AssessBody;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
-
   if (!body.transcript?.trim()) {
     return NextResponse.json({ error: "transcript field is required." }, { status: 400 });
   }
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
+  }
 
-  const partLabel =
-    body.mode === "part-1"
-      ? "Part 1 (personal questions, ~1 min answers)"
-      : "Part 3 (abstract discussion, extended answers)";
-  const model = "gemini-2.5-flash";
+  const prompt = `You are an expert IELTS Speaking examiner and bilingual English-Thai speaking coach.
 
-  const prompt = `You are an expert IELTS speaking examiner and a bilingual English–Thai language teacher.
+Assess the candidate using IELTS Speaking criteria:
+1. Fluency and Coherence
+2. Lexical Resource
+3. Grammatical Range and Accuracy
+4. Pronunciation
 
-${CRITERIA_RUBRIC}
+You will receive:
+- IELTS Speaking part
+- Examiner question
+- Speech-to-text transcript
+- Optional audio metadata
 
-TASK
-====
-Assess the following student response and return ONLY a valid JSON object — no markdown, no prose outside the JSON.
+Important rules:
+- Grade conservatively.
+- Do not over-score short answers.
+- Do not reward memorized-sounding language too much.
+- Do not give Band 7+ unless the candidate shows clear flexibility and control.
+- Do not give Band 8+ unless errors are rare and the response is natural, fluent, and precise.
+- If only transcript is available, pronunciation must be marked as estimated and low-confidence.
+- Separate speech-to-text errors from real language errors.
+- Use IELTS Speaking standards, not writing standards.
+- Give practical advice that helps the student improve by 0.5-1 band.
 
-IELTS Part: ${partLabel}
-Question: "${body.question}"
-Raw student transcript (no punctuation): "${body.transcript}"
+Bilingual output rules:
+- Every major explanation must include English and Thai.
+- English should be clear and examiner-like.
+- Thai should explain the problem naturally for Thai learners.
+- Do not make the Thai explanation too long.
+- Avoid vague comments like "use better vocabulary."
+- Always give concrete examples.
 
-STEP 1 — PUNCTUATION
-Add correct punctuation to the raw transcript. Do NOT fix grammar or change word choice. Only add commas, full stops, question marks, and capitalise sentence starts. Store the result as "punctuatedTranscript".
+Length control:
+- English explanation per criterion: max 45 words.
+- Thai explanation per criterion: max 70 Thai words.
+- Evidence per criterion: max 3 items.
+- Improvement advice per criterion: max 2 items.
+- Grammar corrections: max 5.
+- Vocabulary upgrades: max 5.
+- Sample improved answer: max 150 words.
 
-STEP 2 — ASSESSMENT
-Using the punctuated transcript, assess each criterion against the band descriptors above.
+Return valid JSON only.
+Do not include markdown.
+Do not include extra commentary outside JSON.
 
-STEP 3 — ANNOTATIONS
-Identify up to 8 specific phrases from the punctuated transcript that have issues. Classify each as:
-- "grammar"       → highlight red
-- "vocabulary"    → highlight light blue
-- "pronunciation" → highlight light yellow (infer from word choice / common L1 Thai errors)
-- "coherence"     → highlight light green
-
-STEP 4 — IMPROVED SCRIPT
-Write an improved version of the answer. Rules:
-- Focus on grammar corrections only — this is SPOKEN language, not writing
-- Keep vocabulary mostly the same; no dramatic vocabulary upgrades
-- Keep it natural and spoken in register
-- Write in English only
-
-OUTPUT FORMAT (return exactly this JSON):
+Use this JSON format exactly:
 {
-  "punctuatedTranscript": "<string>",
-  "fluency": {
-    "score": <4.0–9.0 in 0.5 steps>,
-    "scoreTh": "<Thai explanation of why they got this score, 1 sentence>",
-    "scoreEn": "<English explanation of why they got this score, 1 sentence>",
-    "whyBullets": ["<up to 5 bullet strings in English explaining the score>"],
-    "improveBullets": ["<up to 10 strings: 'EXACT PHRASE USED → how to improve to get higher score'>"]
+  "overall": {
+    "rawAverage": 0,
+    "roundedBand": 0,
+    "confidence": "low | medium | high",
+    "scoreType": "single_answer_estimate | full_test_estimate",
+    "englishSummary": "",
+    "thaiSummary": "",
+    "reliabilityWarning": ""
   },
-  "vocabulary": {
-    "score": <number>,
-    "scoreTh": "<string>",
-    "scoreEn": "<string>",
-    "whyBullets": ["<string>"],
-    "improveBullets": ["<string>"]
+  "responseInfo": {
+    "part": "",
+    "question": "",
+    "wordCount": 0,
+    "responseLength": "too short | short | adequate | extended",
+    "possibleSpeechToTextErrors": []
   },
-  "grammar": {
-    "score": <number>,
-    "scoreTh": "<string>",
-    "scoreEn": "<string>",
-    "whyBullets": ["<string>"],
-    "improveBullets": ["<string>"]
+  "criteria": {
+    "fluencyCoherence": {
+      "band": 0,
+      "englishExplanation": "",
+      "thaiExplanation": "",
+      "evidenceFromTranscript": [],
+      "mainIssues": [],
+      "howToImprove": {
+        "english": [],
+        "thai": []
+      }
+    },
+    "lexicalResource": {
+      "band": 0,
+      "englishExplanation": "",
+      "thaiExplanation": "",
+      "evidenceFromTranscript": [],
+      "mainIssues": [],
+      "howToImprove": {
+        "english": [],
+        "thai": []
+      }
+    },
+    "grammarRangeAccuracy": {
+      "band": 0,
+      "englishExplanation": "",
+      "thaiExplanation": "",
+      "evidenceFromTranscript": [],
+      "mainIssues": [],
+      "howToImprove": {
+        "english": [],
+        "thai": []
+      }
+    },
+    "pronunciation": {
+      "band": 0,
+      "englishExplanation": "",
+      "thaiExplanation": "",
+      "evidence": [],
+      "mainIssues": [],
+      "howToImprove": {
+        "english": [],
+        "thai": []
+      },
+      "limitation": ""
+    }
   },
-  "pronunciation": {
-    "score": <number>,
-    "scoreTh": "<string>",
-    "scoreEn": "<string>",
-    "whyBullets": ["<string>"],
-    "improveBullets": ["<string>"]
-  },
-  "overall": <average of 4 scores rounded to nearest 0.5>,
-  "overallTh": "<1–2 Thai sentences overall feedback in a warm coach tone>",
-  "overallEn": "<1–2 English sentences overall feedback in a warm coach tone>",
-  "annotations": [
+  "grammarCorrections": [
     {
-      "phrase": "<exact phrase from punctuatedTranscript>",
-      "category": "grammar|vocabulary|pronunciation|coherence",
-      "issue": "<short English description of the problem>",
-      "correction": "<short English correction or suggestion>"
+      "original": "",
+      "corrected": "",
+      "thaiExplanation": ""
     }
   ],
-  "improvedScript": "<full improved spoken answer in English>"
-}`;
-
-  const geminiRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+  "vocabularyUpgrades": [
     {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.15,
-          maxOutputTokens: 4096,
-          responseMimeType: "application/json",
-        },
-      }),
-    },
-  );
-
-  if (!geminiRes.ok) {
-    const errText = await geminiRes.text();
-    return NextResponse.json(
-      { error: `Speaking assessment service error ${geminiRes.status}: ${errText}` },
-      { status: 502 },
-    );
+      "original": "",
+      "better": "",
+      "thaiExplanation": ""
+    }
+  ],
+  "priorityActions": [
+    {
+      "english": "",
+      "thai": ""
+    }
+  ],
+  "sampleImprovedAnswer": {
+    "english": "",
+    "thaiNote": ""
   }
+}
 
-  const geminiJson = (await geminiRes.json()) as {
-    candidates?: GeminiCandidate[];
-  };
-  const rawText = (geminiJson.candidates ?? [])
-    .flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("\n")
-    .trim();
+Now assess this IELTS Speaking response.
 
-  if (!rawText) {
-    return NextResponse.json(
-      { error: "The speaking assessment service returned an empty response." },
-      { status: 502 },
-    );
-  }
-  let result: AssessmentResult;
+IELTS Speaking Part:
+${body.mode}
+
+Question:
+${body.question}
+
+Speech-to-text transcript:
+${body.transcript}
+
+Audio metadata, if available:
+none`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  const startedAt = Date.now();
   try {
-    result = normalizeAssessmentResult(parseJsonWithFallbacks(rawText));
-  } catch {
-    return NextResponse.json(
-      {
-        error:
-          "Assessment temporarily unavailable from English Plan's 6 years of speaking database.",
-        raw: rawText.slice(0, 1200),
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
       },
-      { status: 502 },
-    );
+      body: JSON.stringify({
+        model: process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini",
+        max_output_tokens: 2500,
+        input: prompt,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    const latency = Date.now() - startedAt;
+    if (!res.ok) {
+      await logUsage(false, latency, String(res.status));
+      return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
+    }
+    const payload = (await res.json()) as { output_text?: string };
+    const raw = payload.output_text?.trim() ?? "";
+    const data = parseJsonObject(raw);
+    const overallNode = (data.overall ?? {}) as Record<string, unknown>;
+    const criteriaNode = (data.criteria ?? {}) as Record<string, unknown>;
+    const responseInfoNode = (data.responseInfo ?? {}) as Record<string, unknown>;
+    const roundedBand = toScore(overallNode.roundedBand);
+    const rawAverage = toScore(overallNode.rawAverage);
+    const result: AssessmentResult = {
+      overall: {
+        rawAverage,
+        roundedBand,
+        confidence:
+          overallNode.confidence === "high" || overallNode.confidence === "medium" || overallNode.confidence === "low"
+            ? overallNode.confidence
+            : "low",
+        scoreType:
+          overallNode.scoreType === "full_test_estimate" ? "full_test_estimate" : "single_answer_estimate",
+        englishSummary: String(overallNode.englishSummary ?? ""),
+        thaiSummary: String(overallNode.thaiSummary ?? ""),
+        reliabilityWarning: String(overallNode.reliabilityWarning ?? ""),
+      },
+      responseInfo: {
+        part: String(responseInfoNode.part ?? body.mode),
+        question: String(responseInfoNode.question ?? body.question),
+        wordCount: Math.max(0, Number(responseInfoNode.wordCount ?? body.transcript.split(/\s+/).filter(Boolean).length)),
+        responseLength:
+          responseInfoNode.responseLength === "too short" ||
+          responseInfoNode.responseLength === "short" ||
+          responseInfoNode.responseLength === "adequate" ||
+          responseInfoNode.responseLength === "extended"
+            ? responseInfoNode.responseLength
+            : "short",
+        possibleSpeechToTextErrors: Array.isArray(responseInfoNode.possibleSpeechToTextErrors)
+          ? responseInfoNode.possibleSpeechToTextErrors.map((v) => String(v))
+          : [],
+      },
+      criteria: {
+        fluencyCoherence: criteriaNode.fluencyCoherence as CriterionDetail,
+        lexicalResource: criteriaNode.lexicalResource as CriterionDetail,
+        grammarRangeAccuracy: criteriaNode.grammarRangeAccuracy as CriterionDetail,
+        pronunciation: criteriaNode.pronunciation as CriterionDetail,
+      },
+      grammarCorrections: Array.isArray(data.grammarCorrections)
+        ? (data.grammarCorrections as Array<Record<string, unknown>>).slice(0, 5).map((row) => ({
+            original: String(row.original ?? ""),
+            corrected: String(row.corrected ?? ""),
+            thaiExplanation: String(row.thaiExplanation ?? ""),
+          }))
+        : [],
+      vocabularyUpgrades: Array.isArray(data.vocabularyUpgrades)
+        ? (data.vocabularyUpgrades as Array<Record<string, unknown>>).slice(0, 5).map((row) => ({
+            original: String(row.original ?? ""),
+            better: String(row.better ?? ""),
+            thaiExplanation: String(row.thaiExplanation ?? ""),
+          }))
+        : [],
+      priorityActions: Array.isArray(data.priorityActions)
+        ? (data.priorityActions as Array<Record<string, unknown>>).map((row) => ({
+            english: String(row.english ?? ""),
+            thai: String(row.thai ?? ""),
+          }))
+        : [],
+      sampleImprovedAnswer: {
+        english: String((data.sampleImprovedAnswer as Record<string, unknown> | undefined)?.english ?? body.transcript),
+        thaiNote: String((data.sampleImprovedAnswer as Record<string, unknown> | undefined)?.thaiNote ?? ""),
+      },
+    };
+    await logUsage(true, latency);
+    if (!result.overall.roundedBand) {
+      return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
+    }
+    return NextResponse.json(result);
+  } catch {
+    clearTimeout(timeout);
+    await logUsage(false, Date.now() - startedAt, "network");
+    return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
   }
-
-  return NextResponse.json(result);
 }

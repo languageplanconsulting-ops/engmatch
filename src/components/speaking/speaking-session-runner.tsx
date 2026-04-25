@@ -510,6 +510,7 @@ function QuickfireRunner({
                       question={question.prompt}
                       transcript={saved.transcript}
                       mode={mode}
+                      runtimeMode={testMode}
                     />
                   </>
                 ) : (
