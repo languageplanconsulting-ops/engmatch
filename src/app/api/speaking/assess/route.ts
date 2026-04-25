@@ -94,6 +94,14 @@ function parseJsonObject(text: string) {
   return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
 }
 
+function firstEnv(...keys: string[]) {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value && value.trim()) return value;
+  }
+  return "";
+}
+
 const ASSESSMENT_PROMPT_PREAMBLE = `You are an expert IELTS Speaking examiner and bilingual English-Thai speaking coach.
 
 Assess the candidate using IELTS Speaking criteria:
@@ -388,7 +396,7 @@ function normalizeAssessmentResult(body: AssessBody, data: Record<string, unknow
 }
 
 async function callOpenAI(prompt: string, signal: AbortSignal) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = firstEnv("OPENAI_API_KEY", "CHATGPT_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY missing");
   const model = process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini";
   const res = await fetch("https://api.openai.com/v1/responses", {
@@ -403,8 +411,8 @@ async function callOpenAI(prompt: string, signal: AbortSignal) {
 }
 
 async function callClaude(prompt: string, signal: AbortSignal) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY missing");
+  const apiKey = firstEnv("ANTHROPIC_API_KEY", "CLAUDE_API_KEY");
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY/CLAUDE_API_KEY missing");
   const model = process.env.ANTHROPIC_SPEAKING_MODEL || "claude-3-5-sonnet-latest";
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -428,8 +436,8 @@ async function callClaude(prompt: string, signal: AbortSignal) {
 }
 
 async function callGemini(prompt: string, signal: AbortSignal) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+  const apiKey = firstEnv("GEMINI_API_KEY", "GOOGLE_API_KEY");
+  if (!apiKey) throw new Error("GEMINI_API_KEY/GOOGLE_API_KEY missing");
   const model = process.env.GEMINI_SPEAKING_MODEL || "gemini-1.5-pro";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
@@ -518,7 +526,10 @@ export async function POST(req: Request) {
     clearTimeout(timeout);
     await logUsage(false, Date.now() - startedAt, "openai", process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini", failures.join(";"));
     return NextResponse.json(
-      { error: "All assessment providers failed. Please check OPENAI_API_KEY, ANTHROPIC_API_KEY, and GEMINI_API_KEY." },
+      {
+        error: "All assessment providers failed. Check provider API keys/models in Vercel env and redeploy.",
+        providerFailures: failures,
+      },
       { status: 502 },
     );
   } catch {
