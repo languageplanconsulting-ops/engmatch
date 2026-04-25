@@ -244,7 +244,7 @@ function ImprovedScript({ text }: { text: string }) {
 // ─── Overall score banner ─────────────────────────────────────────────────────
 
 function OverallBanner({ result }: { result: AssessmentResult }) {
-  const CRITERIA: { key: keyof AssessmentResult; label: string; color: string }[] = [
+  const CRITERIA: { key: "fluency" | "vocabulary" | "grammar" | "pronunciation"; label: string; color: string }[] = [
     { key: "fluency", label: "Fluency", color: "#1d4ed8" },
     { key: "vocabulary", label: "Vocabulary", color: "#0891b2" },
     { key: "grammar", label: "Grammar", color: "#dc2626" },
@@ -286,10 +286,14 @@ export function SpeakingAssessmentReport({
   question,
   transcript,
   mode,
+  runtimeMode,
+  previousOverall,
 }: {
   question: string;
   transcript: string;
-  mode: "part-1" | "part-3";
+  mode: "part-1" | "part-2" | "part-3";
+  runtimeMode?: "mock" | "practice" | "intensive";
+  previousOverall?: number;
 }) {
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = useState<AssessmentResult | null>(null);
@@ -352,7 +356,7 @@ export function SpeakingAssessmentReport({
       const res = await fetch("/api/speaking/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, transcript, mode }),
+        body: JSON.stringify({ question, transcript, mode, runtimeMode, previousOverall }),
       });
       if (!res.ok) {
         const j = (await res.json()) as { error?: string };

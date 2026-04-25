@@ -165,15 +165,28 @@ function CornerTips({ tips }: { tips: SpeakingTip[] }) {
 
 // ─── Mode selector ────────────────────────────────────────────────────────────
 
-type TestMode = "practice" | "live";
+type TestMode = "mock" | "practice" | "intensive";
 
 function ModeSelector({ onSelect }: { onSelect: (m: TestMode) => void }) {
   return (
     <div className="sp-mode-selector">
+      <button type="button" className="sp-mode-card sp-mode-card-live" onClick={() => onSelect("mock")}>
+        <span className="sp-mode-icon">🎧</span>
+        <strong className="sp-mode-title">
+          Mock mode
+          <span className="sp-mode-title-th">สอบจำลอง</span>
+        </strong>
+        <p className="sp-mode-desc">
+          Start instantly. Examiner TTS plays first, then live transcription starts.
+          <span className="sp-mode-desc-th">เริ่มทันที ฟังคำถามจาก TTS แล้วระบบถอดเสียงสดต่อ</span>
+        </p>
+        <span className="sp-mode-cta">Start · เริ่ม →</span>
+      </button>
+
       <button type="button" className="sp-mode-card" onClick={() => onSelect("practice")}>
         <span className="sp-mode-icon">📝</span>
         <strong className="sp-mode-title">
-          Practice Test
+          Practice mode
           <span className="sp-mode-title-th">แบบฝึกหัด</span>
         </strong>
         <p className="sp-mode-desc">
@@ -183,15 +196,15 @@ function ModeSelector({ onSelect }: { onSelect: (m: TestMode) => void }) {
         <span className="sp-mode-cta">Choose · เลือก →</span>
       </button>
 
-      <button type="button" className="sp-mode-card sp-mode-card-live" onClick={() => onSelect("live")}>
+      <button type="button" className="sp-mode-card sp-mode-card-live" onClick={() => onSelect("intensive")}>
         <span className="sp-mode-icon">🎙️</span>
         <strong className="sp-mode-title">
-          Live Practice
-          <span className="sp-mode-title-th">ฝึกจริง</span>
+          Intensive mode
+          <span className="sp-mode-title-th">ฝึกเข้มข้น</span>
         </strong>
         <p className="sp-mode-desc">
-          Timed exactly like the real exam — questions auto-advance.
-          <span className="sp-mode-desc-th">จับเวลาเหมือนสอบจริง คำถามเปลี่ยนอัตโนมัติ</span>
+          Same as mock, then review your top vocabulary and grammar mistakes for retry.
+          <span className="sp-mode-desc-th">เหมือนสอบจำลอง และเน้นจุดผิดคำศัพท์/ไวยากรณ์เพื่อแก้รอบถัดไป</span>
         </p>
         <span className="sp-mode-cta">Choose · เลือก →</span>
       </button>
@@ -346,6 +359,7 @@ function QuickfireRunner({
   const [qIdx, setQIdx] = useState(0);
   const [prepIdx, setPrepIdx] = useState(0);
   const [notesByQuestion, setNotesByQuestion] = useState<Record<string, string>>({});
+  const [manualAnswersByQuestion, setManualAnswersByQuestion] = useState<Record<string, string>>({});
   const [timeLeft, setTimeLeft] = useState(60);
   const [savedAnswers, setSavedAnswers] = useState<
     Record<string, { transcript: string; notes: string }>
@@ -362,10 +376,12 @@ function QuickfireRunner({
   const [speechReady, setSpeechReady] = useState(!waitForTtsBeforeAnswer);
   const questionRunRef = useRef(0);
   const currentQuestionNote = notesByQuestion[q.id] ?? "";
+  const currentManualAnswer = manualAnswersByQuestion[q.id] ?? "";
 
   const { fullText: transcript, listening } = useVoiceCapture(
     isAnswering && (!waitForTtsBeforeAnswer || speechReady),
   );
+  const effectiveTranscript = currentManualAnswer.trim() || transcript;
 
   // Timer
   useEffect(() => {
@@ -405,13 +421,13 @@ function QuickfireRunner({
   }, [isAnswering, q, waitForTtsBeforeAnswer]);
 
   function saveAnswer() {
-    setSavedAnswers((p) => ({ ...p, [q.id]: { transcript, notes: currentQuestionNote } }));
+    setSavedAnswers((p) => ({ ...p, [q.id]: { transcript: effectiveTranscript, notes: currentQuestionNote } }));
   }
 
   function onTimeUp() {
     saveAnswer();
     if (isLast) setPhase("all-done");
-    else if (testMode === "live") {
+    else if (testMode === "mock" || testMode === "intensive") {
       setQIdx((i) => i + 1);
     } else if (enforceOneMinutePerQuestion) {
       setQIdx((i) => i + 1);
@@ -424,7 +440,8 @@ function QuickfireRunner({
     setQIdx(0);
     setPrepIdx(0);
     setNotesByQuestion({});
-    setPhase(m === "live" ? "live" : mode === "part-1" ? "practice-plan-all" : "practice-read");
+    setManualAnswersByQuestion({});
+    setPhase(m === "mock" || m === "intensive" ? "live" : mode === "part-1" ? "practice-plan-all" : "practice-read");
   }
 
   function goNext() {
@@ -512,6 +529,7 @@ function QuickfireRunner({
               setQIdx(0);
               setPrepIdx(0);
               setNotesByQuestion({});
+              setManualAnswersByQuestion({});
               setPhase("mode-select");
             }}
           >
@@ -638,6 +656,38 @@ function QuickfireRunner({
                     : transcript || "เริ่มพูดได้เลย — คำพูดของคุณจะปรากฏที่นี่ · Start speaking — your words will appear here…"}
                 </p>
               </div>
+              <label className="sp-notes-label">
+                <span className="en">Paste or edit your answer (optional)</span>
+                <span className="th">วางหรือแก้ไขคำตอบของคุณ (ไม่บังคับ)</span>
+                <textarea
+                  className="sp-notes-area"
+                  rows={5}
+                  placeholder="Paste your answer text here if needed… / วางข้อความคำตอบที่นี่ได้เลย…"
+                  value={currentManualAnswer}
+                  onChange={(e) =>
+                    setManualAnswersByQuestion((prev) => ({ ...prev, [q.id]: e.target.value }))
+                  }
+                />
+              </label>
+              {currentManualAnswer.trim() && (
+                <button
+                  type="button"
+                  className="sp-ready-btn"
+                  onClick={() => {
+                    saveAnswer();
+                    if (isLast) {
+                      setPhase("all-done");
+                    } else if (testMode === "mock" || testMode === "intensive" || enforceOneMinutePerQuestion) {
+                      setQIdx((i) => i + 1);
+                      setPhase("practice-answer");
+                    } else {
+                      setPhase("practice-next");
+                    }
+                  }}
+                >
+                  ส่งข้อความนี้เลย · Submit typed answer now
+                </button>
+              )}
 
               {phase === "practice-answer" && !enforceOneMinutePerQuestion && (
                 <button type="button" className="sp-next-btn" onClick={goNext}>
@@ -699,7 +749,11 @@ function QuickfireRunner({
           <div className="sp-side-section">
             <p className="sp-side-label">โหมด · Mode</p>
             <span className={`sp-mode-badge sp-mode-badge-${testMode}`}>
-              {testMode === "live" ? "🎙️ ฝึกจริง · Live" : "📝 แบบฝึกหัด · Practice"}
+              {testMode === "practice"
+                ? "📝 แบบฝึกหัด · Practice"
+                : testMode === "mock"
+                  ? "🎧 สอบจำลอง · Mock"
+                  : "🎙️ ฝึกเข้มข้น · Intensive"}
             </span>
           </div>
         </aside>
@@ -716,27 +770,45 @@ function QuickfireRunner({
 // ─── CueCardRunner ────────────────────────────────────────────────────────────
 
 function CueCardRunner({ test }: { test: SpeakingCueCardTest }) {
+  const [testMode, setTestMode] = useState<TestMode>("practice");
   const [prepMinutes, setPrepMinutes] = useState(test.preparationOptions[0] ?? 1);
-  const [stage, setStage] = useState<"setup" | "prep" | "speak" | "review" | "done">("setup");
+  const [stage, setStage] = useState<"mode-select" | "setup" | "prep" | "speak" | "review" | "done">("mode-select");
   const [prepLeft, setPrepLeft] = useState(prepMinutes * 60);
   const [speakLeft, setSpeakLeft] = useState(120);
   const [speechReady, setSpeechReady] = useState(false);
   const [notes, setNotes] = useState("");
+  const [manualTranscript, setManualTranscript] = useState("");
   const [frozenNotes, setFrozenNotes] = useState("");
   const [attempt, setAttempt] = useState(1);
   const notesRef = useRef("");
   const speakRunRef = useRef(0);
 
   const { fullText: transcript, listening } = useVoiceCapture(stage === "speak" && speechReady);
+  const effectiveTranscript = manualTranscript.trim() || transcript;
+
+  function selectMode(mode: TestMode) {
+    setTestMode(mode);
+    setPrepMinutes(test.preparationOptions[0] ?? 1);
+    setPrepLeft((test.preparationOptions[0] ?? 1) * 60);
+    setSpeakLeft(120);
+    setSpeechReady(false);
+    setNotes("");
+    notesRef.current = "";
+    setFrozenNotes("");
+    setManualTranscript("");
+    setAttempt(1);
+    setStage("setup");
+  }
 
   const startSpeakingRound = useCallback(() => {
     const runId = speakRunRef.current + 1;
     speakRunRef.current = runId;
     setSpeechReady(false);
     setStage("speak");
-    setSpeakLeft(120);
     void playQuestionAndWait(test.question.ttsText, test.question.ttsAudioUrl).finally(() => {
       if (speakRunRef.current !== runId) return;
+      // Start the full 2-minute countdown only after examiner TTS finishes.
+      setSpeakLeft(120);
       setSpeechReady(true);
     });
   }, [test.question.ttsAudioUrl, test.question.ttsText]);
@@ -783,6 +855,16 @@ function CueCardRunner({ test }: { test: SpeakingCueCardTest }) {
             <p className="sp-question-num">Part 2 · บัตรหัวข้อ</p>
             <p className="sp-question-text">{test.question.prompt}</p>
           </div>
+
+          {stage === "mode-select" && (
+            <>
+              <p className="sp-mode-prompt">
+                เลือกโหมดฝึกพูด
+                <span className="sp-mode-prompt-en"> · How would you like to practise?</span>
+              </p>
+              <ModeSelector onSelect={selectMode} />
+            </>
+          )}
 
           {stage === "setup" && (
             <div className="sp-practice-read">
@@ -850,19 +932,46 @@ function CueCardRunner({ test }: { test: SpeakingCueCardTest }) {
                     : "ระบบจะเริ่มจับเวลาและถอดเสียงทันทีเมื่อคำถามพูดจบ · Timer and live transcript will start right after TTS ends."}
                 </p>
               </div>
+              <label className="sp-notes-label">
+                <span className="en">Paste or edit your answer (optional)</span>
+                <span className="th">วางหรือแก้ไขคำตอบของคุณ (ไม่บังคับ)</span>
+                <textarea
+                  className="sp-notes-area"
+                  rows={5}
+                  placeholder="Paste your answer text here if needed… / วางข้อความคำตอบที่นี่ได้เลย…"
+                  value={manualTranscript}
+                  onChange={(e) => setManualTranscript(e.target.value)}
+                />
+              </label>
+              {manualTranscript.trim() && (
+                <button
+                  type="button"
+                  className="sp-ready-btn"
+                  onClick={() => {
+                    setStage("review");
+                  }}
+                >
+                  ส่งข้อความนี้เลย · Submit typed answer now
+                </button>
+              )}
             </div>
           )}
 
           {stage === "review" && (
             <div className="sp-between-card">
               <p className="sp-between-saved">หมดเวลา! พอใจกับคำตอบนี้ไหม? · Time&apos;s up! Happy with that attempt?</p>
-              <SpeakingAssessmentReport question={test.question.prompt} transcript={transcript} mode="part-1" />
+              <SpeakingAssessmentReport
+                question={test.question.prompt}
+                transcript={effectiveTranscript}
+                mode="part-2"
+                runtimeMode={testMode}
+              />
               <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
                 <button type="button" className="sp-ready-btn" onClick={() => setStage("done")}>
                   ✓ บันทึก · Save
                 </button>
                 <button type="button" className="sp-next-btn"
-                  onClick={() => { setAttempt((a) => a + 1); startSpeakingRound(); }}>
+                  onClick={() => { setAttempt((a) => a + 1); setManualTranscript(""); startSpeakingRound(); }}>
                   ลองใหม่ · Try again
                 </button>
               </div>
@@ -887,11 +996,22 @@ function CueCardRunner({ test }: { test: SpeakingCueCardTest }) {
           <div className="sp-side-section">
             <p className="sp-side-label">ขั้นตอน · Stage</p>
             <span className="sp-mode-badge sp-mode-badge-practice">
-              {stage === "setup" ? "เลือกเวลา · Choose prep"
+              {stage === "mode-select" ? "เลือกโหมด · Choose mode"
+                : stage === "setup" ? "เลือกเวลา · Choose prep"
                 : stage === "prep" ? "เตรียมตัว · Preparation"
                 : stage === "speak" ? "🎙️ กำลังพูด · Speaking"
                 : stage === "review" ? "ตรวจสอบ · Review"
                 : "✓ เสร็จสิ้น · Done"}
+            </span>
+          </div>
+          <div className="sp-side-section">
+            <p className="sp-side-label">โหมด · Mode</p>
+            <span className={`sp-mode-badge sp-mode-badge-${testMode}`}>
+              {testMode === "practice"
+                ? "📝 แบบฝึกหัด · Practice"
+                : testMode === "mock"
+                  ? "🎧 สอบจำลอง · Mock"
+                  : "🎙️ ฝึกเข้มข้น · Intensive"}
             </span>
           </div>
           {attempt > 1 && (
