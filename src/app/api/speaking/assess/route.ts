@@ -94,117 +94,7 @@ function parseJsonObject(text: string) {
   return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
 }
 
-function fallbackAssessment(transcript: string, previousOverall: number | undefined): AssessmentResult {
-  const words = transcript.trim().split(/\s+/).filter(Boolean).length;
-  const baseBand = words > 160 ? 6.5 : words > 100 ? 6 : words > 60 ? 5.5 : 5;
-  const roundedBand = toScore(baseBand);
-  const scoreType = "single_answer_estimate" as const;
-  const responseLength: AssessmentResult["responseInfo"]["responseLength"] =
-    words < 20 ? "too short" : words < 50 ? "short" : words < 140 ? "adequate" : "extended";
-  return {
-    overall: {
-      rawAverage: roundedBand,
-      roundedBand,
-      confidence: "low",
-      scoreType,
-      englishSummary: "AI is temporarily unavailable; this is a conservative deterministic estimate.",
-      thaiSummary: "ระบบ AI ไม่พร้อมชั่วคราว จึงแสดงคะแนนประมาณการแบบระมัดระวัง",
-      reliabilityWarning: "Pronunciation is estimated with low confidence because no validated audio analysis is available.",
-    },
-    responseInfo: {
-      part: "",
-      question: "",
-      wordCount: words,
-      responseLength,
-      possibleSpeechToTextErrors: [],
-    },
-    criteria: {
-      fluencyCoherence: {
-        band: roundedBand,
-        englishExplanation: "Temporary estimate based on transcript length and continuity.",
-        thaiExplanation: "คะแนนชั่วคราวจากความยาวคำตอบและความต่อเนื่องของข้อความ",
-        evidenceFromTranscript: [],
-        mainIssues: [],
-        howToImprove: { english: [], thai: [] },
-      },
-      lexicalResource: {
-        band: toScore(roundedBand - 0.5),
-        englishExplanation: "Temporary estimate for vocabulary range and appropriacy.",
-        thaiExplanation: "คะแนนชั่วคราวด้านช่วงคำศัพท์และความเหมาะสมในการใช้คำ",
-        evidenceFromTranscript: [],
-        mainIssues: [],
-        howToImprove: { english: [], thai: [] },
-      },
-      grammarRangeAccuracy: {
-        band: toScore(roundedBand - 0.5),
-        englishExplanation: "Temporary estimate for grammar range and control.",
-        thaiExplanation: "คะแนนชั่วคราวด้านความหลากหลายและความถูกต้องของไวยากรณ์",
-        evidenceFromTranscript: [],
-        mainIssues: [],
-        howToImprove: { english: [], thai: [] },
-      },
-      pronunciation: {
-        band: roundedBand,
-        englishExplanation: "Estimated from transcript only.",
-        thaiExplanation: "ประเมินจากข้อความถอดเสียงเท่านั้น",
-        evidence: [],
-        mainIssues: [],
-        howToImprove: { english: [], thai: [] },
-        limitation: "Audio not available; pronunciation confidence is low.",
-      },
-    },
-    grammarCorrections: [],
-    vocabularyUpgrades: [],
-    priorityActions: [],
-    sampleImprovedAnswer: {
-      english: transcript.trim(),
-      thaiNote: "ตัวอย่างนี้อิงจากคำตอบเดิมเนื่องจากระบบประเมินชั่วคราว",
-    },
-    errorCode: "fallback",
-  };
-}
-
-async function logUsage(success: boolean, latencyMs: number, errorCode?: string) {
-  try {
-    const usageDelegate = (
-      prisma as unknown as {
-        aiUsageEvent?: { create: (args: { data: Record<string, unknown> }) => Promise<unknown> };
-      }
-    ).aiUsageEvent;
-    if (!usageDelegate) return;
-    await usageDelegate.create({
-      data: {
-        feature: "speaking-assessment",
-        endpoint: "/api/speaking/assess",
-        provider: "openai",
-        model: process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini",
-        success,
-        estimatedCostUsd: success ? 0.004 : 0,
-        latencyMs,
-        errorCode: errorCode ?? null,
-      },
-    });
-  } catch {
-    // Ignore analytics failures.
-  }
-}
-
-export async function POST(req: Request) {
-  let body: AssessBody;
-  try {
-    body = (await req.json()) as AssessBody;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
-  }
-  if (!body.transcript?.trim()) {
-    return NextResponse.json({ error: "transcript field is required." }, { status: 400 });
-  }
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
-  }
-
-  const prompt = `You are an expert IELTS Speaking examiner and bilingual English-Thai speaking coach.
+const ASSESSMENT_PROMPT_PREAMBLE = `You are an expert IELTS Speaking examiner and bilingual English-Thai speaking coach.
 
 Assess the candidate using IELTS Speaking criteria:
 1. Fluency and Coherence
@@ -339,7 +229,10 @@ Use this JSON format exactly:
     "english": "",
     "thaiNote": ""
   }
-}
+}`;
+
+function buildAssessmentPrompt(body: AssessBody) {
+  return `${ASSESSMENT_PROMPT_PREAMBLE}
 
 Now assess this IELTS Speaking response.
 
@@ -354,106 +247,283 @@ ${body.transcript}
 
 Audio metadata, if available:
 none`;
+}
+
+function fallbackAssessment(transcript: string, previousOverall: number | undefined): AssessmentResult {
+  const words = transcript.trim().split(/\s+/).filter(Boolean).length;
+  const baseBand = words > 160 ? 6.5 : words > 100 ? 6 : words > 60 ? 5.5 : 5;
+  const roundedBand = toScore(baseBand);
+  const scoreType = "single_answer_estimate" as const;
+  const responseLength: AssessmentResult["responseInfo"]["responseLength"] =
+    words < 20 ? "too short" : words < 50 ? "short" : words < 140 ? "adequate" : "extended";
+  return {
+    overall: {
+      rawAverage: roundedBand,
+      roundedBand,
+      confidence: "low",
+      scoreType,
+      englishSummary: "AI is temporarily unavailable; this is a conservative deterministic estimate.",
+      thaiSummary: "ระบบ AI ไม่พร้อมชั่วคราว จึงแสดงคะแนนประมาณการแบบระมัดระวัง",
+      reliabilityWarning: "Pronunciation is estimated with low confidence because no validated audio analysis is available.",
+    },
+    responseInfo: {
+      part: "",
+      question: "",
+      wordCount: words,
+      responseLength,
+      possibleSpeechToTextErrors: [],
+    },
+    criteria: {
+      fluencyCoherence: {
+        band: roundedBand,
+        englishExplanation: "Temporary estimate based on transcript length and continuity.",
+        thaiExplanation: "คะแนนชั่วคราวจากความยาวคำตอบและความต่อเนื่องของข้อความ",
+        evidenceFromTranscript: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+      },
+      lexicalResource: {
+        band: toScore(roundedBand - 0.5),
+        englishExplanation: "Temporary estimate for vocabulary range and appropriacy.",
+        thaiExplanation: "คะแนนชั่วคราวด้านช่วงคำศัพท์และความเหมาะสมในการใช้คำ",
+        evidenceFromTranscript: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+      },
+      grammarRangeAccuracy: {
+        band: toScore(roundedBand - 0.5),
+        englishExplanation: "Temporary estimate for grammar range and control.",
+        thaiExplanation: "คะแนนชั่วคราวด้านความหลากหลายและความถูกต้องของไวยากรณ์",
+        evidenceFromTranscript: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+      },
+      pronunciation: {
+        band: roundedBand,
+        englishExplanation: "Estimated from transcript only.",
+        thaiExplanation: "ประเมินจากข้อความถอดเสียงเท่านั้น",
+        evidence: [],
+        mainIssues: [],
+        howToImprove: { english: [], thai: [] },
+        limitation: "Audio not available; pronunciation confidence is low.",
+      },
+    },
+    grammarCorrections: [],
+    vocabularyUpgrades: [],
+    priorityActions: [],
+    sampleImprovedAnswer: {
+      english: transcript.trim(),
+      thaiNote: "ตัวอย่างนี้อิงจากคำตอบเดิมเนื่องจากระบบประเมินชั่วคราว",
+    },
+    errorCode: "fallback",
+  };
+}
+
+function normalizeAssessmentResult(body: AssessBody, data: Record<string, unknown>): AssessmentResult {
+  const overallNode = (data.overall ?? {}) as Record<string, unknown>;
+  const criteriaNode = (data.criteria ?? {}) as Record<string, unknown>;
+  const responseInfoNode = (data.responseInfo ?? {}) as Record<string, unknown>;
+  const roundedBand = toScore(overallNode.roundedBand);
+  const rawAverage = toScore(overallNode.rawAverage);
+  return {
+    overall: {
+      rawAverage,
+      roundedBand,
+      confidence:
+        overallNode.confidence === "high" || overallNode.confidence === "medium" || overallNode.confidence === "low"
+          ? overallNode.confidence
+          : "low",
+      scoreType:
+        overallNode.scoreType === "full_test_estimate" ? "full_test_estimate" : "single_answer_estimate",
+      englishSummary: String(overallNode.englishSummary ?? ""),
+      thaiSummary: String(overallNode.thaiSummary ?? ""),
+      reliabilityWarning: String(overallNode.reliabilityWarning ?? ""),
+    },
+    responseInfo: {
+      part: String(responseInfoNode.part ?? body.mode),
+      question: String(responseInfoNode.question ?? body.question),
+      wordCount: Math.max(0, Number(responseInfoNode.wordCount ?? body.transcript.split(/\s+/).filter(Boolean).length)),
+      responseLength:
+        responseInfoNode.responseLength === "too short" ||
+        responseInfoNode.responseLength === "short" ||
+        responseInfoNode.responseLength === "adequate" ||
+        responseInfoNode.responseLength === "extended"
+          ? responseInfoNode.responseLength
+          : "short",
+      possibleSpeechToTextErrors: Array.isArray(responseInfoNode.possibleSpeechToTextErrors)
+        ? responseInfoNode.possibleSpeechToTextErrors.map((v) => String(v))
+        : [],
+    },
+    criteria: {
+      fluencyCoherence: criteriaNode.fluencyCoherence as CriterionDetail,
+      lexicalResource: criteriaNode.lexicalResource as CriterionDetail,
+      grammarRangeAccuracy: criteriaNode.grammarRangeAccuracy as CriterionDetail,
+      pronunciation: criteriaNode.pronunciation as CriterionDetail,
+    },
+    grammarCorrections: Array.isArray(data.grammarCorrections)
+      ? (data.grammarCorrections as Array<Record<string, unknown>>).slice(0, 5).map((row) => ({
+          original: String(row.original ?? ""),
+          corrected: String(row.corrected ?? ""),
+          thaiExplanation: String(row.thaiExplanation ?? ""),
+        }))
+      : [],
+    vocabularyUpgrades: Array.isArray(data.vocabularyUpgrades)
+      ? (data.vocabularyUpgrades as Array<Record<string, unknown>>).slice(0, 5).map((row) => ({
+          original: String(row.original ?? ""),
+          better: String(row.better ?? ""),
+          thaiExplanation: String(row.thaiExplanation ?? ""),
+        }))
+      : [],
+    priorityActions: Array.isArray(data.priorityActions)
+      ? (data.priorityActions as Array<Record<string, unknown>>).map((row) => ({
+          english: String(row.english ?? ""),
+          thai: String(row.thai ?? ""),
+        }))
+      : [],
+    sampleImprovedAnswer: {
+      english: String((data.sampleImprovedAnswer as Record<string, unknown> | undefined)?.english ?? body.transcript),
+      thaiNote: String((data.sampleImprovedAnswer as Record<string, unknown> | undefined)?.thaiNote ?? ""),
+    },
+  };
+}
+
+async function callOpenAI(prompt: string, signal: AbortSignal) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY missing");
+  const model = process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini";
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, max_output_tokens: 2500, input: prompt }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`openai-${res.status}`);
+  const payload = (await res.json()) as { output_text?: string };
+  return { provider: "openai" as const, model, text: payload.output_text?.trim() ?? "" };
+}
+
+async function callClaude(prompt: string, signal: AbortSignal) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY missing");
+  const model = process.env.ANTHROPIC_SPEAKING_MODEL || "claude-3-5-sonnet-latest";
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 3000,
+      temperature: 0.2,
+      messages: [{ role: "user", content: prompt }],
+    }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`anthropic-${res.status}`);
+  const payload = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
+  const text = payload.content?.find((item) => item.type === "text")?.text ?? "";
+  return { provider: "anthropic" as const, model, text: text.trim() };
+}
+
+async function callGemini(prompt: string, signal: AbortSignal) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+  const model = process.env.GEMINI_SPEAKING_MODEL || "gemini-1.5-pro";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      generationConfig: { temperature: 0.2, maxOutputTokens: 3000 },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`gemini-${res.status}`);
+  const payload = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  return { provider: "gemini" as const, model, text: text.trim() };
+}
+
+async function logUsage(
+  success: boolean,
+  latencyMs: number,
+  provider: "openai" | "anthropic" | "gemini",
+  model: string,
+  errorCode?: string,
+) {
+  try {
+    const usageDelegate = (
+      prisma as unknown as {
+        aiUsageEvent?: { create: (args: { data: Record<string, unknown> }) => Promise<unknown> };
+      }
+    ).aiUsageEvent;
+    if (!usageDelegate) return;
+    await usageDelegate.create({
+      data: {
+        feature: "speaking-assessment",
+        endpoint: "/api/speaking/assess",
+        provider,
+        model,
+        success,
+        estimatedCostUsd: success ? 0.004 : 0,
+        latencyMs,
+        errorCode: errorCode ?? null,
+      },
+    });
+  } catch {
+    // Ignore analytics failures.
+  }
+}
+
+export async function POST(req: Request) {
+  let body: AssessBody;
+  try {
+    body = (await req.json()) as AssessBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+  if (!body.transcript?.trim()) {
+    return NextResponse.json({ error: "transcript field is required." }, { status: 400 });
+  }
+  const prompt = buildAssessmentPrompt(body);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25000);
   const startedAt = Date.now();
+  const providers: Array<() => Promise<{ provider: "openai" | "anthropic" | "gemini"; model: string; text: string }>> = [
+    () => callOpenAI(prompt, controller.signal),
+    () => callClaude(prompt, controller.signal),
+    () => callGemini(prompt, controller.signal),
+  ];
+  const failures: string[] = [];
   try {
-    const res = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini",
-        max_output_tokens: 2500,
-        input: prompt,
-      }),
-      signal: controller.signal,
-    });
+    for (const callProvider of providers) {
+      try {
+        const output = await callProvider();
+        const data = parseJsonObject(output.text);
+        const result = normalizeAssessmentResult(body, data);
+        if (!result.overall.roundedBand) throw new Error("invalid-band");
+        clearTimeout(timeout);
+        await logUsage(true, Date.now() - startedAt, output.provider, output.model);
+        return NextResponse.json(result);
+      } catch (err) {
+        failures.push(err instanceof Error ? err.message : "unknown");
+      }
+    }
     clearTimeout(timeout);
-    const latency = Date.now() - startedAt;
-    if (!res.ok) {
-      await logUsage(false, latency, String(res.status));
-      return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
-    }
-    const payload = (await res.json()) as { output_text?: string };
-    const raw = payload.output_text?.trim() ?? "";
-    const data = parseJsonObject(raw);
-    const overallNode = (data.overall ?? {}) as Record<string, unknown>;
-    const criteriaNode = (data.criteria ?? {}) as Record<string, unknown>;
-    const responseInfoNode = (data.responseInfo ?? {}) as Record<string, unknown>;
-    const roundedBand = toScore(overallNode.roundedBand);
-    const rawAverage = toScore(overallNode.rawAverage);
-    const result: AssessmentResult = {
-      overall: {
-        rawAverage,
-        roundedBand,
-        confidence:
-          overallNode.confidence === "high" || overallNode.confidence === "medium" || overallNode.confidence === "low"
-            ? overallNode.confidence
-            : "low",
-        scoreType:
-          overallNode.scoreType === "full_test_estimate" ? "full_test_estimate" : "single_answer_estimate",
-        englishSummary: String(overallNode.englishSummary ?? ""),
-        thaiSummary: String(overallNode.thaiSummary ?? ""),
-        reliabilityWarning: String(overallNode.reliabilityWarning ?? ""),
-      },
-      responseInfo: {
-        part: String(responseInfoNode.part ?? body.mode),
-        question: String(responseInfoNode.question ?? body.question),
-        wordCount: Math.max(0, Number(responseInfoNode.wordCount ?? body.transcript.split(/\s+/).filter(Boolean).length)),
-        responseLength:
-          responseInfoNode.responseLength === "too short" ||
-          responseInfoNode.responseLength === "short" ||
-          responseInfoNode.responseLength === "adequate" ||
-          responseInfoNode.responseLength === "extended"
-            ? responseInfoNode.responseLength
-            : "short",
-        possibleSpeechToTextErrors: Array.isArray(responseInfoNode.possibleSpeechToTextErrors)
-          ? responseInfoNode.possibleSpeechToTextErrors.map((v) => String(v))
-          : [],
-      },
-      criteria: {
-        fluencyCoherence: criteriaNode.fluencyCoherence as CriterionDetail,
-        lexicalResource: criteriaNode.lexicalResource as CriterionDetail,
-        grammarRangeAccuracy: criteriaNode.grammarRangeAccuracy as CriterionDetail,
-        pronunciation: criteriaNode.pronunciation as CriterionDetail,
-      },
-      grammarCorrections: Array.isArray(data.grammarCorrections)
-        ? (data.grammarCorrections as Array<Record<string, unknown>>).slice(0, 5).map((row) => ({
-            original: String(row.original ?? ""),
-            corrected: String(row.corrected ?? ""),
-            thaiExplanation: String(row.thaiExplanation ?? ""),
-          }))
-        : [],
-      vocabularyUpgrades: Array.isArray(data.vocabularyUpgrades)
-        ? (data.vocabularyUpgrades as Array<Record<string, unknown>>).slice(0, 5).map((row) => ({
-            original: String(row.original ?? ""),
-            better: String(row.better ?? ""),
-            thaiExplanation: String(row.thaiExplanation ?? ""),
-          }))
-        : [],
-      priorityActions: Array.isArray(data.priorityActions)
-        ? (data.priorityActions as Array<Record<string, unknown>>).map((row) => ({
-            english: String(row.english ?? ""),
-            thai: String(row.thai ?? ""),
-          }))
-        : [],
-      sampleImprovedAnswer: {
-        english: String((data.sampleImprovedAnswer as Record<string, unknown> | undefined)?.english ?? body.transcript),
-        thaiNote: String((data.sampleImprovedAnswer as Record<string, unknown> | undefined)?.thaiNote ?? ""),
-      },
-    };
-    await logUsage(true, latency);
-    if (!result.overall.roundedBand) {
-      return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
-    }
-    return NextResponse.json(result);
+    await logUsage(false, Date.now() - startedAt, "openai", process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini", failures.join(";"));
+    return NextResponse.json(
+      { error: "All assessment providers failed. Please check OPENAI_API_KEY, ANTHROPIC_API_KEY, and GEMINI_API_KEY." },
+      { status: 502 },
+    );
   } catch {
     clearTimeout(timeout);
-    await logUsage(false, Date.now() - startedAt, "network");
-    return NextResponse.json(fallbackAssessment(body.transcript, body.previousOverall));
+    await logUsage(false, Date.now() - startedAt, "openai", process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini", "network");
+    return NextResponse.json({ error: "Assessment request failed." }, { status: 502 });
   }
 }

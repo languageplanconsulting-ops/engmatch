@@ -128,7 +128,7 @@ export function SpeakingAssessmentReport({
         body: JSON.stringify({ question, transcript, mode, runtimeMode }),
       });
       if (!res.ok) {
-        const j = (await res.json()) as { error?: string };
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error ?? "Assessment failed");
       }
       const data = (await res.json()) as AssessmentResult;
