@@ -1,57 +1,109 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AssessmentResult, CriterionDetail } from "@/app/api/speaking/assess/route";
+import type {
+  AssessmentResult,
+  BucketChecklist,
+  StepUpCorrection,
+} from "@/app/api/speaking/assess/route";
 
-function ReportSection({ title, children }: { title: string; children: React.ReactNode }) {
+function SectionTitle({ thai, english }: { thai: string; english: string }) {
   return (
-    <section className="sp-report-section">
-      <h3 className="sp-report-section-title">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-function CriterionBlock({ title, detail }: { title: string; detail: CriterionDetail }) {
-  const evidence = detail.evidenceFromTranscript ?? detail.evidence ?? [];
-  return (
-    <div className="sp-criterion-section">
-      <div className="sp-criterion-header">
-        <p className="sp-criterion-label">{title}</p>
-        <strong className="sp-criterion-score">{detail.band.toFixed(1)}</strong>
-      </div>
-      <p className="sp-criterion-summary-en">{detail.englishExplanation}</p>
-      <p className="sp-criterion-summary-th">{detail.thaiExplanation}</p>
-      {evidence.length > 0 && (
-        <ul className="sp-bullet-list">
-          {evidence.map((item, idx) => (
-            <li key={idx} className="sp-bullet-item">{item}</li>
-          ))}
-        </ul>
-      )}
-      {detail.mainIssues.length > 0 && (
-        <p className="sp-criterion-summary-th">Issues: {detail.mainIssues.join(" | ")}</p>
-      )}
-      {detail.howToImprove.english.length > 0 && (
-        <ul className="sp-bullet-list">
-          {detail.howToImprove.english.map((tip, idx) => (
-            <li key={idx} className="sp-bullet-item">{tip}</li>
-          ))}
-        </ul>
-      )}
-      {detail.howToImprove.thai.length > 0 && (
-        <ul className="sp-bullet-list">
-          {detail.howToImprove.thai.map((tip, idx) => (
-            <li key={idx} className="sp-bullet-item">{tip}</li>
-          ))}
-        </ul>
-      )}
-      {detail.limitation && <p className="sp-criterion-summary-th">{detail.limitation}</p>}
+    <div className="mb-4">
+      <h3 className="text-xl font-semibold text-slate-900">{thai}</h3>
+      <p className="text-sm text-slate-500">{english}</p>
     </div>
   );
 }
 
-// ─── Public component ─────────────────────────────────────────────────────────
+function BucketColumn({
+  title,
+  subtitle,
+  checklist,
+}: {
+  title: string;
+  subtitle: string;
+  checklist: BucketChecklist;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-lg font-semibold text-slate-900">{subtitle}</p>
+          <p className="text-sm text-slate-500">{title}</p>
+        </div>
+        <div className="rounded-full bg-[#004aad] px-3 py-1 text-sm font-semibold text-white">
+          Band {checklist.currentBand}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">สิ่งที่คุณทำได้</p>
+          <p className="mb-2 text-xs text-slate-500">Achieved</p>
+          <ul className="space-y-2">
+            {checklist.achieved.map((item, idx) => (
+              <li key={idx} className="rounded-xl bg-emerald-50 p-3">
+                <p className="checklist-done text-sm font-semibold">{`✓ ${item.thai}`}</p>
+                <p className="text-xs text-emerald-700">{item.english}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div>
+          <p className="text-sm font-semibold text-slate-900">เป้าหมายต่อไป</p>
+          <p className="mb-2 text-xs text-slate-500">{`Target +1 Band (${checklist.nextTargetBand})`}</p>
+          <ul className="space-y-2">
+            {checklist.missingForNextBand.map((item, idx) => (
+              <li key={idx} className="rounded-xl bg-amber-50 p-3">
+                <p className="checklist-miss text-sm font-semibold">{`🔒 ${item.thai}`}</p>
+                <p className="text-xs text-amber-700">{item.english}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CorrectionCard({ correction }: { correction: StepUpCorrection }) {
+  const badgeLabel =
+    correction.type === "grammar"
+      ? "Grammar"
+      : correction.type === "vocabulary"
+        ? "Vocabulary"
+        : "Fluency";
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 inline-flex rounded-full bg-[#ffcc00] px-3 py-1 text-xs font-semibold text-slate-900 shadow-sm">
+        {`${badgeLabel}: Target Band ${correction.targetBand}`}
+      </div>
+
+      {correction.type === "fluency" ? (
+        <div className="rounded-xl bg-sky-50 p-4">
+          <p className="text-sm font-semibold text-slate-900">Suggestion to add</p>
+          <p className="mt-2 text-sm text-slate-700">{correction.suggestionToAdd ?? "-"}</p>
+        </div>
+      ) : (
+        <div className="rounded-xl bg-slate-50 p-4 text-sm">
+          <span className="text-red-600 line-through decoration-2">{correction.originalText ?? "-"}</span>
+          <span className="mx-3 text-lg text-[#004aad]">→</span>
+          <span className="font-semibold text-emerald-700 underline decoration-2 underline-offset-2">
+            {correction.improvedText ?? "-"}
+          </span>
+        </div>
+      )}
+
+      <div className="mt-3 space-y-1">
+        <p className="text-sm font-semibold text-slate-900">{correction.thaiExplanation}</p>
+        <p className="text-sm text-slate-500">{correction.englishExplanation}</p>
+      </div>
+    </div>
+  );
+}
 
 export function SpeakingAssessmentReport({
   question,
@@ -65,9 +117,7 @@ export function SpeakingAssessmentReport({
   transcript: string;
   mode: "part-1" | "part-2" | "part-3";
   runtimeMode?: "mock" | "practice" | "intensive";
-  /** When set (including null), syncs display from parent instead of only internal fetch. */
   seedResult?: AssessmentResult | null;
-  /** Hide the default “Get feedback” button (e.g. admin compare runs assess elsewhere). */
   hideAssessTrigger?: boolean;
 }) {
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">(() =>
@@ -76,38 +126,6 @@ export function SpeakingAssessmentReport({
   const [result, setResult] = useState<AssessmentResult | null>(() => seedResult ?? null);
   const [errorMsg, setErrorMsg] = useState("");
   const [loadingProgress, setLoadingProgress] = useState(1);
-  const [loadingStepIdx, setLoadingStepIdx] = useState(0);
-
-  const loadingSteps = [
-    {
-      en: "Getting your grammar signals",
-      th: "กำลังดึงสัญญาณด้านไวยากรณ์ของคุณ",
-    },
-    {
-      en: "Checking your vocabulary range",
-      th: "กำลังตรวจช่วงคำศัพท์ที่คุณใช้",
-    },
-    {
-      en: "Measuring fluency and flow",
-      th: "กำลังวัดความคล่องและความลื่นไหลในการพูด",
-    },
-    {
-      en: "Comparing with official IELTS band descriptors",
-      th: "กำลังเทียบกับเกณฑ์ Band Description อย่างเป็นทางการของ IELTS",
-    },
-    {
-      en: "Building personalized next-step coaching",
-      th: "กำลังสร้างแผนโค้ชเฉพาะตัวสำหรับครั้งถัดไป",
-    },
-    {
-      en: "Highlighting your strengths and weaknesses",
-      th: "กำลังสรุปจุดแข็งและจุดที่ควรพัฒนา",
-    },
-    {
-      en: "Preparing feedback as if P'Doy is beside you",
-      th: "กำลังเตรียมฟีดแบ็กเหมือนพี่ดอยนั่งติวอยู่ข้างๆ",
-    },
-  ];
 
   useEffect(() => {
     if (seedResult === undefined) return;
@@ -117,35 +135,24 @@ export function SpeakingAssessmentReport({
 
   useEffect(() => {
     if (state !== "loading") return;
-
     const interval = window.setInterval(() => {
-      setLoadingProgress((prev) => {
-        if (prev >= 95) return prev;
-        const delta = Math.max(1, Math.round((100 - prev) / 15));
-        return Math.min(95, prev + delta);
-      });
-      setLoadingStepIdx((prev) => (prev + 1) % loadingSteps.length);
-    }, 1200);
-
+      setLoadingProgress((prev) => (prev >= 95 ? prev : Math.min(95, prev + 6)));
+    }, 900);
     return () => window.clearInterval(interval);
-  }, [state, loadingSteps.length]);
+  }, [state]);
 
   async function assess() {
     setState("loading");
     setResult(null);
-    setLoadingProgress(3);
-    setLoadingStepIdx(0);
+    setLoadingProgress(5);
     try {
       const res = await fetch("/api/speaking/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, transcript, mode, runtimeMode }),
       });
-      if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error ?? "Assessment failed");
-      }
-      const data = (await res.json()) as AssessmentResult;
+      const data = (await res.json().catch(() => ({}))) as AssessmentResult & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Assessment failed");
       setResult(data);
       setState("done");
     } catch (err) {
@@ -159,189 +166,172 @@ export function SpeakingAssessmentReport({
 
   if (state === "idle") {
     if (hideAssessTrigger) {
-      return (
-        <p className="sp-criterion-summary-th" style={{ marginTop: 12 }}>
-          No report for this model yet. Use “Run all models” above, or pick another tab.
-        </p>
-      );
+      return <p className="mt-3 text-sm text-slate-500">No report yet for this provider.</p>;
     }
     return (
       <div className="sp-assess-trigger">
         <button type="button" className="sp-assess-trigger-btn" onClick={assess}>
-          ✦ Get personalized feedback from English Plan&apos;s 6 years of speaking database
+          ✦ Generate bilingual bucket-list report
         </button>
       </div>
     );
   }
 
   if (state === "loading") {
-    const activeStep = loadingSteps[loadingStepIdx];
     return (
-      <div className="sp-assess-loading-card">
-        <div className="sp-assess-loading-head">
-          <div>
-            <p className="sp-assess-loading-kicker">English Plan Speaking Intelligence</p>
-            <h4 className="sp-assess-loading-title">Analyzing with 6 years of speaking database</h4>
-            <p className="sp-assess-loading-title-th">กำลังวิเคราะห์ด้วยฐานข้อมูลการพูดของ English Plan ตลอด 6 ปี</p>
-          </div>
-          <strong className="sp-assess-loading-percent">{loadingProgress}%</strong>
+      <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <p className="text-sm font-semibold text-[#004aad]">English Plan Speaking Intelligence</p>
+        <h4 className="mt-1 text-xl font-semibold text-slate-900">Building your bilingual bucket-list report</h4>
+        <p className="mt-1 text-sm text-slate-500">กำลังประมวลผล transcript, bucket checklist และ step-up corrections</p>
+        <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
+          <div className="h-full rounded-full bg-[#004aad]" style={{ width: `${loadingProgress}%` }} />
         </div>
-
-        <div className="sp-assess-loading-progress" aria-hidden="true">
-          <span style={{ width: `${loadingProgress}%` }} />
-        </div>
-
-        <div className="sp-assess-loading-active">
-          <span className="sp-assess-spinner" aria-hidden="true" />
-          <div>
-            <p>{activeStep.en}</p>
-            <p>{activeStep.th}</p>
-          </div>
-        </div>
-
-        <ul className="sp-assess-loading-list">
-          {loadingSteps.slice(0, 5).map((step, idx) => {
-            const isDone = idx < loadingStepIdx;
-            const isCurrent = idx === loadingStepIdx;
-            return (
-              <li key={step.en} className={`sp-assess-loading-item${isCurrent ? " is-current" : ""}`}>
-                <span>{isDone ? "✓" : isCurrent ? "•" : "○"}</span>
-                <div>
-                  <p>{step.en}</p>
-                  <p>{step.th}</p>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
       </div>
     );
   }
 
   if (state === "error") {
     return (
-      <div className="sp-assess-error">
-        <strong>English Plan feedback temporarily unavailable</strong>
-        <p>{errorMsg}</p>
-        <button type="button" className="sp-assess-trigger-btn" onClick={assess}>Retry</button>
+      <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+        <strong className="text-red-700">English Plan feedback temporarily unavailable</strong>
+        <p className="mt-1 text-sm text-red-600">{errorMsg}</p>
+        <button type="button" className="sp-assess-trigger-btn mt-3" onClick={assess}>
+          Retry
+        </button>
       </div>
     );
   }
 
   if (!result) return null;
-  const feedbackColor =
-    result.feedbackSource === "gemini"
-      ? "#2563eb"
-      : result.feedbackSource === "anthropic"
-        ? "#f97316"
-        : "#e2e8f0";
-  const feedbackModelLabel =
-    result.errorCode === "fallback"
-      ? "Fallback Estimate"
-      : result.feedbackSource === "gemini"
-      ? "Gemini"
-      : result.feedbackSource === "anthropic"
-        ? "Claude"
-        : "ChatGPT";
-  const transcriptEvidence = [
-    ...(result.criteria.fluencyCoherence.evidenceFromTranscript ?? []),
-    ...(result.criteria.lexicalResource.evidenceFromTranscript ?? []),
-    ...(result.criteria.grammarRangeAccuracy.evidenceFromTranscript ?? []),
-    ...(result.criteria.pronunciation.evidence ?? []),
-  ].slice(0, 12);
+
+  const { reportCard } = result;
 
   return (
-    <div className="sp-report">
-      <ReportSection title="Band justification">
-        <p className="sp-criterion-summary-en" style={{ borderLeft: `6px solid ${feedbackColor}`, paddingLeft: 8 }}>
-          MODEL USED: {feedbackModelLabel}{result.feedbackModel ? ` (${result.feedbackModel})` : ""}
-        </p>
-        <div
-          title="Feedback source"
-          style={{
-            width: 14,
-            height: 14,
-            borderRadius: 9999,
-            background: feedbackColor,
-            border: "1px solid #cbd5e1",
-            marginBottom: 8,
-          }}
-        />
-        <p className="sp-criterion-summary-en">{result.overall.englishSummary}</p>
-        <p className="sp-criterion-summary-th">{result.overall.thaiSummary}</p>
-        <p className="sp-criterion-summary-en">
-          Band: {result.overall.roundedBand.toFixed(1)} (raw {result.overall.rawAverage.toFixed(1)}, confidence: {result.overall.confidence})
-        </p>
-        {result.overall.reliabilityWarning && <p className="sp-criterion-summary-th">{result.overall.reliabilityWarning}</p>}
+    <div className="space-y-6 rounded-[32px] border border-slate-200 bg-[radial-gradient(circle_at_top,#eff6ff_0%,#ffffff_38%,#f8fafc_100%)] p-4 shadow-sm md:p-6">
+      <div className="overflow-hidden rounded-[28px] border border-[#003a87] bg-[#004aad] text-white shadow-lg">
+        <div className="bg-[linear-gradient(135deg,rgba(255,255,255,0.14),rgba(255,255,255,0.02))] p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#ffcc00]">Speaking Report</p>
+              <p className="mt-2 text-2xl font-semibold leading-tight">{reportCard.topicName}</p>
+              <p className="mt-2 text-sm text-blue-100">รายงานประเมินการพูดแบบ bilingual bucket-list</p>
+            </div>
+            <div className="rounded-[24px] bg-[#ffcc00] px-5 py-4 text-slate-900 shadow-md">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em]">Final Overall Band</p>
+              <p className="mt-2 text-4xl font-bold">{reportCard.scoreCalculation.roundedBand.toFixed(1)}</p>
+              <p className="mt-1 text-xs">{`Exact average ${reportCard.scoreCalculation.exactAverage.toFixed(2)}`}</p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+            <div className="rounded-[24px] border border-white/20 bg-white/10 p-4 backdrop-blur-sm">
+              <p className="text-sm font-semibold text-[#ffcc00]">Score Calculation Formula</p>
+              <p className="mt-2 text-sm font-medium leading-7">{reportCard.scoreCalculation.formula}</p>
+              <p className="mt-2 text-xs text-blue-100">
+                {`Grammar ${reportCard.scoreCalculation.grammar} · Vocabulary ${reportCard.scoreCalculation.vocabulary} · Fluency ${reportCard.scoreCalculation.fluency} · Pronunciation ${reportCard.scoreCalculation.pronunciation}`}
+              </p>
+              <p className="mt-1 text-xs text-blue-100">
+                คะแนนรวมคำนวณจาก 4 องค์ประกอบ แล้วปัดตามกติกา overall band
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl bg-white/10 p-4 text-center">
+                <p className="text-sm font-semibold text-[#ffcc00]">Grammar</p>
+                <p className="mt-2 text-2xl font-bold">{reportCard.scoreCalculation.grammar.toFixed(1)}</p>
+              </div>
+              <div className="rounded-2xl bg-white/10 p-4 text-center">
+                <p className="text-sm font-semibold text-[#ffcc00]">Vocabulary</p>
+                <p className="mt-2 text-2xl font-bold">{reportCard.scoreCalculation.vocabulary.toFixed(1)}</p>
+              </div>
+              <div className="rounded-2xl bg-white/10 p-4 text-center">
+                <p className="text-sm font-semibold text-[#ffcc00]">Fluency</p>
+                <p className="mt-2 text-2xl font-bold">{reportCard.scoreCalculation.fluency.toFixed(1)}</p>
+              </div>
+              <div className="rounded-2xl bg-white/10 p-4 text-center">
+                <p className="text-sm font-semibold text-[#ffcc00]">Pronunciation</p>
+                <p className="mt-2 text-2xl font-bold">{reportCard.scoreCalculation.pronunciation.toFixed(1)}</p>
+              </div>
+            </div>
+          </div>
+
+          <p className="mt-4 text-xs text-blue-100">
+            {`Pronunciation confidence: ${reportCard.scoreCalculation.pronunciationConfidencePct ?? "n/a"}%`}
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <SectionTitle thai="AI Pre-processing" english="Raw ASR transcript vs. punctuated transcript" />
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3 inline-flex rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
+              Raw ASR
+            </div>
+            <p className="text-lg font-semibold text-slate-900">ข้อความดิบจากระบบถอดเสียง</p>
+            <p className="mt-1 text-sm text-slate-500">Raw ASR transcript</p>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{reportCard.preprocess.rawTranscript}</p>
+          </div>
+          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+            <div className="mb-3 inline-flex rounded-full bg-[#004aad] px-3 py-1 text-xs font-semibold text-white">
+              Punctuated
+            </div>
+            <p className="text-lg font-semibold text-slate-900">เวอร์ชันที่เติมวรรคตอนแล้ว</p>
+            <p className="mt-1 text-sm text-slate-500">Punctuated transcript</p>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{reportCard.preprocess.punctuatedTranscript}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <SectionTitle thai="Bucket List Checklists" english="Grammar, vocabulary, and fluency buckets" />
+        <div className="grid gap-4 lg:grid-cols-3">
+          <BucketColumn title="Grammar" subtitle="ไวยากรณ์" checklist={reportCard.buckets.grammar} />
+          <BucketColumn title="Vocabulary" subtitle="คำศัพท์" checklist={reportCard.buckets.vocabulary} />
+          <BucketColumn title="Fluency" subtitle="ความคล่องแคล่ว" checklist={reportCard.buckets.fluency} />
+        </div>
+      </div>
+
+      <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <SectionTitle thai="Pronunciation Logic" english="Kept with Whisper AI confidence scoring" />
+        <div className="grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-[24px] border border-blue-100 bg-[linear-gradient(180deg,#eff6ff,#ffffff)] p-5">
+            <p className="text-base font-semibold text-slate-900">คะแนนการออกเสียง</p>
+            <p className="mt-1 text-sm text-slate-500">Pronunciation score</p>
+            <p className="mt-3 text-5xl font-bold text-[#004aad]">{result.criteria.pronunciation.band.toFixed(1)}</p>
+          </div>
+          <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+            <p className="text-base font-semibold text-slate-900">{result.criteria.pronunciation.thaiExplanation}</p>
+            <p className="mt-1 text-sm text-slate-500">{result.criteria.pronunciation.englishExplanation}</p>
+            <ul className="mt-4 list-disc space-y-1.5 pl-5 text-sm text-slate-600">
+              {(result.criteria.pronunciation.evidence ?? []).map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <SectionTitle thai="Step +1 Corrections" english="Corrections based only on the missing buckets" />
+        <div className="space-y-4">
+          {reportCard.stepUpCorrections.map((correction, idx) => (
+            <CorrectionCard key={idx} correction={correction} />
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <SectionTitle thai="Overall Summary" english="Bilingual examiner summary" />
+        <p className="text-lg font-semibold leading-8 text-slate-900">{result.overall.thaiSummary}</p>
+        <p className="mt-2 text-sm leading-7 text-slate-500">{result.overall.englishSummary}</p>
+        <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-400">{result.overall.reliabilityWarning}</p>
         {result.errorCode === "fallback" && (
-          <p className="sp-criterion-summary-th">
-            Fallback reason: {result.fallbackReason ?? "All providers failed before JSON normalization."}
+          <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-xs font-medium text-amber-700">
+            {result.fallbackReason ?? "Fallback estimate only."}
           </p>
         )}
-      </ReportSection>
-
-      <ReportSection title="Subskill breakdown">
-        <div className="sp-criteria-stack">
-          <CriterionBlock title="Fluency and Coherence" detail={result.criteria.fluencyCoherence} />
-          <CriterionBlock title="Lexical Resource" detail={result.criteria.lexicalResource} />
-          <CriterionBlock title="Grammatical Range and Accuracy" detail={result.criteria.grammarRangeAccuracy} />
-          <CriterionBlock title="Pronunciation" detail={result.criteria.pronunciation} />
-        </div>
-      </ReportSection>
-
-      <ReportSection title="Exact transcript evidence">
-        <ul className="sp-bullet-list">
-          {transcriptEvidence.map((item, idx) => (
-            <li key={idx} className="sp-bullet-item">{item}</li>
-          ))}
-        </ul>
-      </ReportSection>
-
-      <ReportSection title="Repeated error patterns">
-        <ul className="sp-bullet-list">
-          {[
-            ...result.criteria.fluencyCoherence.mainIssues,
-            ...result.criteria.lexicalResource.mainIssues,
-            ...result.criteria.grammarRangeAccuracy.mainIssues,
-            ...result.criteria.pronunciation.mainIssues,
-          ].slice(0, 12).map((item, idx) => (
-            <li key={idx} className="sp-bullet-item">{item}</li>
-          ))}
-        </ul>
-      </ReportSection>
-
-      <ReportSection title="Sentence-level corrections">
-        <ul className="sp-bullet-list">
-          {result.grammarCorrections.map((row, idx) => (
-            <li key={idx} className="sp-bullet-item">
-              <strong>{row.original}</strong> → {row.corrected} ({row.thaiExplanation})
-            </li>
-          ))}
-        </ul>
-      </ReportSection>
-
-      <ReportSection title="Vocabulary replacement table">
-        <ul className="sp-bullet-list">
-          {result.vocabularyUpgrades.map((row, idx) => (
-            <li key={idx} className="sp-bullet-item">
-              <strong>{row.original}</strong> → {row.better} ({row.thaiExplanation})
-            </li>
-          ))}
-        </ul>
-      </ReportSection>
-
-      <ReportSection title="Band 6 -> Band 7 upgrade advice">
-        <ul className="sp-bullet-list">
-          {result.priorityActions.map((row, idx) => (
-            <li key={idx} className="sp-bullet-item">{row.english} | {row.thai}</li>
-          ))}
-        </ul>
-      </ReportSection>
-
-      <ReportSection title="Improved sample answer">
-        <p className="sp-criterion-summary-en">{result.sampleImprovedAnswer.english}</p>
-        <p className="sp-criterion-summary-th">{result.sampleImprovedAnswer.thaiNote}</p>
-      </ReportSection>
+      </div>
 
       <button type="button" className="sp-reassess-btn" onClick={assess}>
         ↺ Re-assess

@@ -19,6 +19,14 @@
   --shadow-soft: 4px 4px 0 #0f172a;
 }
 
+.checklist-done {
+  color: #10b981;
+}
+
+.checklist-miss {
+  color: #f59e0b;
+}
+
 * {
   box-sizing: border-box;
 }
