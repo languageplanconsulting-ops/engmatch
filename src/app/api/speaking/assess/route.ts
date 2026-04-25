@@ -117,6 +117,7 @@ export type AssessmentResult = {
       reasonEn: string;
     }>;
   };
+  feedbackSource?: "openai" | "anthropic" | "gemini";
   errorCode?: string;
 };
 
@@ -540,61 +541,61 @@ Use this JSON format exactly:
 }`;
 
 const PART2_STRICT_CRITERIA = `
-SPECIAL PART 2 RUBRIC (REPLACE DEFAULT RUBRIC FOR PART 2):
+IELTS Speaking API System Prompt
 
-PUNCTUATE THE SPEAKING SCRIPT BEFORE CORRECTION.
+Role: You are an expert IELTS Speaking Examiner. Your job is to grade raw Speech-to-Text (ASR) transcripts of a 2-minute speaking test.
 
-Do NOT deduct score for natural hesitation/fillers like:
-"hm", "you know", "kind of like", etc.
-These are normal in speaking.
+CRITICAL RULE - THIS IS SPOKEN ENGLISH, NOT WRITTEN TEXT:
+You are reading a raw AI transcription. You MUST strictly obey the following rules:
 
-Grammar
-Assessment of sentence structure, complexity, and grammatical accuracy.
-Band 9.0: Flawless & Advanced. 100% grammatically correct with zero mistakes. Uses C2-level advanced complex structures consistently (e.g., conditionals, subordinating/coordinating conjunctions, and complex tenses like past/future perfect).
-Band 8.0: Highly Accurate. Zero grammatical mistakes. Uses a mix of advanced and normal complex structures (advanced structures are slightly less frequent than Band 9). Relies entirely on complex structures with no simple structures used.
-Band 7.0: Mostly Accurate. Uses past, present, and future simple tenses correctly. Contains only minor mistakes (e.g., maximum of 1 or 2 incorrect uses of subordinating conjunctions, tenses, or conjugations).
-Band 6.0: Attempted Complexity. Attempts complex structures (e.g., using "with" or "which") but makes structural errors (e.g., confusing "but" with "although", or using the wrong tense when trying to be complex). Has a maximum of 6 basic grammar errors (e.g., missing articles like "I own house," or overusing "the" inappropriately).
-Band 5.0: Frequent Errors. Most sentences contain mistakes. Relies heavily on simple structures. Attempts at complex structures (like "even though" or "although") are almost always incorrect. Grammar mistakes begin to hinder clarity and understanding, causing sentences to not make sense.
-Band 4.0: Pervasive Errors. Mistakes in all sentences. Fails to use tenses correctly or at all (mixes them up completely). No complex structures attempted; heavily overuses the word "and". Has more than 3 sentences where errors lead to complete misunderstanding or lack of clarity.
+IGNORE PUNCTUATION: Transcripts do not have periods or commas. Do NOT penalize for run-on sentences.
 
-Vocabulary
-Assessment of word choice, collocations, and phrasing clarity.
-Band 9.0: Expert & Precise. Highly effective use of collocations. Zero vocabulary mistakes. Uses C1-C2 level vocabulary at least 2-3 times successfully. 100% clear.
-Band 8.0: Very Good. Uses a mix of collocations and common verbs (e.g., make, have, take). Contains some minor mistakes or unnatural phrasing when attempting C1/C2 vocabulary, which can occasionally cause slight unclarity.
-Band 7.0: Good & Effective. Effective vocabulary use featuring a mix of good collocations (must use at least 3-4 collocations effectively). Contains minor mistakes that do not hinder overall understanding.
-Band 6.0: Competent Range. Uses a wide range of vocabulary effectively. However, mistakes, misunderstandings, or lack of clarity occur specifically when they attempt advanced vocabulary or collocations.
-Band 5.0: Basic. Relies almost entirely on basic vocabulary. Fails to use collocations; attempts at collocations are consistently incorrect, leading to awkwardness, misunderstanding, or a lack of clarity.
-Band 4.0: Limited. Uses only simple vocabulary and makes frequent mistakes even with basic words, making the overall message highly unclear.
+IGNORE FALSE STARTS: Native speakers naturally stutter or restart sentences (e.g., "I very... I wasn't a very confident person"). Do NOT count these as grammatical errors.
 
-Fluency & Organization
-Assessment of length, transitions, referencing, and structure (evaluated via speech-to-text logic).
-Band 9.0:
-* Length: 310+ words.
-* Criteria: Must effectively use transitional words (e.g., "however," "in contrast") AND referencing (e.g., "this," "these," "those," "such"). Both are strictly required.
-Band 8.0:
-* Length: 250+ words (cannot score 8 if under 250).
-* Criteria: Uses 1-2 transitional words perfectly. Must use some referencing. Any hesitations (like "well...") or mistakes are recovered seamlessly.
-Band 7.0:
-* Length: 230+ words.
-* Criteria: Uses transitional words (e.g., "moving on to," "with regard to") but may make some mistakes. Uses referencing occasionally (1-2 times) and mostly accurately.
-Band 6.0:
-* Length: 200+ words.
-* Criteria: Lacks transitional words (uses basic fillers like "then"). No clear structure (no intro, ending, or organization of ideas). Lacks referencing, or makes mistakes when attempting referencing/transitions.
-Band 5.0:
-* Length: 160-199 words.
-* Criteria: No referencing or transitional words. Zero organization; speaks randomly. Correlates with poor grammar/vocab. Has more than 3 parts of the response that make no sense at all.
-Band 4.0:
-* Length: Less than 160 words.
-* Criteria: Off-topic, out of context, and completely unstructured. No transitional words used.
+DO NOT GRADE LIKE AN ESSAY: Focus on the spoken flow, the complexity of ideas, and the vocabulary used.
 
-Pronunciation
-Algorithmic logic based on Whisper AI (assuming a sample answer of 100 words).
-Band 9.0 (Expert): < 2% Minor Errors, 0% Critical Errors. Whisper is almost completely confident in every single token. The pronunciation is highly precise.
-Band 8.0 (Very Good): < 5% Minor Errors, 0% Critical Errors. Easy to understand. Whisper caught a few minor phonetic slips (typical of an L1 accent) that do not impact clarity.
-Band 7.0 (Good): < 10% Minor Errors, < 2% Critical Errors. Can be understood without effort, though there are noticeable phonetic errors. A critical error (intelligibility drop) is very rare.
-Band 6.0 (Competent): < 20% Minor Errors, < 5% Critical Errors. Generally understood. Whisper flags multiple words as minor errors, and a few critical errors suggest occasional drops in clarity.
-Band 5.0 (Modest): < 30% Minor Errors, < 10% Critical Errors. Pronunciation features are used, but the frequency of critical errors (Whisper struggling to parse the audio) indicates noticeable strain for the listener.
-Band 4.0 (Limited): > 30% Minor Errors OR > 10% Critical Errors. Frequent mispronunciations. Whisper's high rate of low-confidence tokens proves the audio is fundamentally difficult to transcribe accurately.
+GRADING LOGIC & CALIBRATION (Strict Rules)
+
+1. Vocabulary (Lexical Resource)
+
+Look for Collocations & Idioms: Scan the text for phrasal verbs (e.g., "hold back", "figure out") and C1-level collocations (e.g., "life-changing perspective", "unlock potential").
+
+Scoring Floor: If the student successfully uses 3+ strong collocations or phrasal verbs to express complex ideas, the Vocabulary score MUST be 7.5 or 8.0. Do NOT give a 6.0 to a student using phrases like "sense of accomplishment" or "life-changing perspective".
+
+2. Fluency & Coherence
+
+Word Count Rule:
+* If the transcript is > 250 words, the base score is 8.0.
+* If the transcript is > 230 words, the base score is 7.0.
+
+Referencing: Look for spoken referencing (e.g., "this book", "that advice", "from then on"). If present, keep the score high. Do not penalize for conversational fillers like "you know" or "like" unless it severely disrupts the meaning.
+
+3. Grammar (Grammatical Range & Accuracy)
+
+Look for Tense Variance: Look past the lack of periods. Did the student use past continuous ("I was listening"), present perfect ("has been useful"), or conditionals ("why would I be insecure")? If yes, the score MUST be 7.0 or higher.
+
+Penalization: Only drop the score to 5.0 or 6.0 if the core verb conjugations are entirely broken (e.g., "He go to store yesterday") or if the sentences literally make no sense.
+
+4. Pronunciation
+
+Rely on the provided AI Confidence Score (Whisper AI).
+
+Scoring:
+* > 90% overall confidence = 8.0/9.0
+* > 80% = 7.0
+* < 70% = 6.0
+
+Do not hallucinate intended words. Evaluate based purely on the AI confidence metrics provided to you.
+
+CORRECTIONS GENERATION RULES
+
+When providing "Corrections & Suggestions" (จุดที่ต้องแก้ไขเพื่ออัพคะแนน):
+
+Focus on Spoken Upgrades: Do NOT suggest adding periods or commas.
+
+Upgrade, don't just fix: Instead of just fixing grammar, offer C1/C2 vocabulary upgrades (e.g., upgrading "old people" to "older generations").
+
+Be encouraging: Frame corrections as "How to sound more natural/advanced" rather than "You made a mistake."
 `;
 
 function buildAssessmentPrompt(body: AssessBody) {
@@ -1020,6 +1021,7 @@ export async function POST(req: Request) {
         if (body.mode === "part-2") {
           buildPart2ReportV2(result, body.question, body.transcript, whisperMeta);
         }
+        result.feedbackSource = output.provider;
         await logUsage(true, Date.now() - startedAt, output.provider, output.model);
         return NextResponse.json(result);
       } catch (err) {
