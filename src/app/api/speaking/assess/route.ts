@@ -102,6 +102,15 @@ function firstEnv(...keys: string[]) {
   return "";
 }
 
+function parseModelCandidates(raw: string | undefined, defaults: string[]) {
+  const fromEnv = (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const combined = [...fromEnv, ...defaults];
+  return [...new Set(combined)];
+}
+
 function firstEnvKey(...keys: string[]) {
   for (const key of keys) {
     const value = process.env[key];
@@ -124,6 +133,26 @@ class ProviderCallError extends Error {
     this.status = status;
     this.responseSnippet = responseSnippet;
   }
+}
+
+function extractOpenAIText(payload: unknown) {
+  const asRecord = (payload ?? {}) as Record<string, unknown>;
+  const outputText = typeof asRecord.output_text === "string" ? asRecord.output_text.trim() : "";
+  if (outputText) return outputText;
+
+  const output = Array.isArray(asRecord.output) ? asRecord.output : [];
+  const chunks: string[] = [];
+  for (const item of output) {
+    const itemRecord = item as Record<string, unknown>;
+    const content = Array.isArray(itemRecord.content) ? itemRecord.content : [];
+    for (const part of content) {
+      const partRecord = part as Record<string, unknown>;
+      if (typeof partRecord.text === "string" && partRecord.text.trim()) {
+        chunks.push(partRecord.text.trim());
+      }
+    }
+  }
+  return chunks.join("\n").trim();
 }
 
 const ASSESSMENT_PROMPT_PREAMBLE = `You are an expert IELTS Speaking examiner and bilingual English-Thai speaking coach.
@@ -433,8 +462,8 @@ async function callOpenAI(prompt: string, signal: AbortSignal) {
     const responseSnippet = clip(await res.text().catch(() => ""));
     throw new ProviderCallError(`OpenAI HTTP ${res.status}`, "http_error", res.status, responseSnippet);
   }
-  const payload = (await res.json()) as { output_text?: string };
-  const text = payload.output_text?.trim() ?? "";
+  const payload = (await res.json()) as unknown;
+  const text = extractOpenAIText(payload);
   if (!text) throw new ProviderCallError("OpenAI returned empty output_text.", "empty_response");
   return { provider: "openai" as const, model, text };
 }
@@ -442,56 +471,87 @@ async function callOpenAI(prompt: string, signal: AbortSignal) {
 async function callClaude(prompt: string, signal: AbortSignal) {
   const apiKey = firstEnv("ANTHROPIC_API_KEY", "CLAUDE_API_KEY");
   if (!apiKey) throw new ProviderCallError("Missing Claude key.", "missing_key");
-  const model = process.env.ANTHROPIC_SPEAKING_MODEL || "claude-3-5-sonnet-latest";
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 3000,
-      temperature: 0.2,
-      messages: [{ role: "user", content: prompt }],
-    }),
-    signal,
-  });
-  if (!res.ok) {
-    const responseSnippet = clip(await res.text().catch(() => ""));
-    throw new ProviderCallError(`Claude HTTP ${res.status}`, "http_error", res.status, responseSnippet);
+  const models = parseModelCandidates(process.env.ANTHROPIC_SPEAKING_MODEL, [
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-sonnet-20240620",
+    "claude-3-7-sonnet-20250219",
+  ]);
+
+  let lastError: ProviderCallError | null = null;
+  for (const model of models) {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 3000,
+        temperature: 0.2,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal,
+    });
+    if (!res.ok) {
+      const responseSnippet = clip(await res.text().catch(() => ""));
+      lastError = new ProviderCallError(`Claude HTTP ${res.status}`, "http_error", res.status, responseSnippet);
+      if (res.status === 404) continue;
+      throw lastError;
+    }
+    const payload = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
+    const text = payload.content?.find((item) => item.type === "text")?.text ?? "";
+    if (!text.trim()) {
+      lastError = new ProviderCallError("Claude returned empty text.", "empty_response");
+      continue;
+    }
+    return { provider: "anthropic" as const, model, text: text.trim() };
   }
-  const payload = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
-  const text = payload.content?.find((item) => item.type === "text")?.text ?? "";
-  if (!text.trim()) throw new ProviderCallError("Claude returned empty text.", "empty_response");
-  return { provider: "anthropic" as const, model, text: text.trim() };
+
+  throw lastError ?? new ProviderCallError("Claude failed for all configured models.", "model_fallback_exhausted");
 }
 
 async function callGemini(prompt: string, signal: AbortSignal) {
   const apiKey = firstEnv("GEMINI_API_KEY", "GOOGLE_API_KEY");
   if (!apiKey) throw new ProviderCallError("Missing Gemini key.", "missing_key");
-  const model = process.env.GEMINI_SPEAKING_MODEL || "gemini-1.5-pro";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      generationConfig: { temperature: 0.2, maxOutputTokens: 3000 },
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-    }),
-    signal,
-  });
-  if (!res.ok) {
-    const responseSnippet = clip(await res.text().catch(() => ""));
-    throw new ProviderCallError(`Gemini HTTP ${res.status}`, "http_error", res.status, responseSnippet);
+  const models = parseModelCandidates(process.env.GEMINI_SPEAKING_MODEL, [
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-pro-002",
+    "gemini-2.0-flash",
+  ]);
+
+  let lastError: ProviderCallError | null = null;
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        generationConfig: { temperature: 0.2, maxOutputTokens: 3000 },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      }),
+      signal,
+    });
+    if (!res.ok) {
+      const responseSnippet = clip(await res.text().catch(() => ""));
+      lastError = new ProviderCallError(`Gemini HTTP ${res.status}`, "http_error", res.status, responseSnippet);
+      if (res.status === 404) continue;
+      throw lastError;
+    }
+    const payload = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    if (!text.trim()) {
+      lastError = new ProviderCallError("Gemini returned empty text.", "empty_response");
+      continue;
+    }
+    return { provider: "gemini" as const, model, text: text.trim() };
   }
-  const payload = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  if (!text.trim()) throw new ProviderCallError("Gemini returned empty text.", "empty_response");
-  return { provider: "gemini" as const, model, text: text.trim() };
+
+  throw lastError ?? new ProviderCallError("Gemini failed for all configured models.", "model_fallback_exhausted");
 }
 
 async function withProviderTimeout<T>(
