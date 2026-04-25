@@ -51,6 +51,15 @@ function CriterionBlock({ title, detail }: { title: string; detail: CriterionDet
   );
 }
 
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 // ─── Public component ─────────────────────────────────────────────────────────
 
 export function SpeakingAssessmentReport({
@@ -240,11 +249,62 @@ export function SpeakingAssessmentReport({
   }
 
   if (!result) return null;
+  const feedbackColor =
+    result.feedbackSource === "gemini"
+      ? "#2563eb"
+      : result.feedbackSource === "anthropic"
+        ? "#f97316"
+        : "#e2e8f0";
+  const feedbackModelLabel =
+    result.feedbackSource === "gemini"
+      ? "Gemini"
+      : result.feedbackSource === "anthropic"
+        ? "Claude"
+        : "ChatGPT";
   if (mode === "part-2" && result.reportV2) {
     const report = result.reportV2;
+    const highlightTranscript = (() => {
+      let html = escapeHtml(report.transcriptAnalysis.punctuatedTranscript);
+      for (const item of report.pronunciation.lowConfidenceWords) {
+        if (!item.heard) continue;
+        const escaped = item.heard.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(`\\b${escaped}\\b`, "gi");
+        html = html.replace(
+          regex,
+          `<span style="background:#fee2e2;border-bottom:2px solid #ef4444;border-radius:4px;padding:0 4px;" title="AI confidence ${item.confidencePct}%">$&</span>`,
+        );
+      }
+      return html;
+    })();
+
+    const speakWord = (text: string) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window) || !text.trim()) return;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 0.9;
+      window.speechSynthesis.speak(u);
+    };
+
     return (
-      <div style={{ background: "#f8fafc", borderRadius: 16, padding: 16 }}>
-        <section style={{ background: "#004aad", color: "white", borderRadius: 16, padding: 20, marginBottom: 16 }}>
+      <div style={{ background: "#f8fafc", borderRadius: 16, padding: 16, borderLeft: `8px solid ${feedbackColor}` }}>
+        <section style={{ background: "#004aad", color: "white", borderRadius: 16, padding: 20, marginBottom: 16, position: "relative" }}>
+          <div
+            title="Feedback source"
+            style={{
+              position: "absolute",
+              right: 20,
+              top: 20,
+              width: 16,
+              height: 16,
+              borderRadius: 9999,
+              background: feedbackColor,
+              border: "1px solid rgba(255,255,255,0.8)",
+            }}
+          />
+          <p style={{ margin: "0 0 8px", fontSize: 12, color: "rgba(255,255,255,0.88)" }}>
+            MODEL USED: <strong style={{ color: "#ffcc00" }}>{feedbackModelLabel}</strong>
+            {result.feedbackModel ? ` (${result.feedbackModel})` : ""}
+          </p>
           <p style={{ color: "#ffcc00", fontWeight: 700, marginBottom: 8 }}>Part 2: พูดเดี่ยว 2 นาที</p>
           <h3 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>รายงานผลการประเมินการพูด</h3>
           <p style={{ opacity: 0.88, marginTop: 6, marginBottom: 10 }}>Speaking Assessment Report</p>
@@ -280,7 +340,7 @@ export function SpeakingAssessmentReport({
         <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
           <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>การวิเคราะห์บทพูด</h4>
           <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Transcript Analysis</p>
-          <p style={{ lineHeight: 1.8, marginTop: 12 }}>{report.transcriptAnalysis.rawTranscript}</p>
+          <p style={{ lineHeight: 1.8, marginTop: 12 }} dangerouslySetInnerHTML={{ __html: highlightTranscript }} />
           {report.transcriptAnalysis.transitionWords.length > 0 && (
             <p style={{ marginTop: 8, fontSize: 13 }}>
               <strong>Good transitions:</strong> {report.transcriptAnalysis.transitionWords.join(", ")}
@@ -296,6 +356,7 @@ export function SpeakingAssessmentReport({
         <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
           <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>การวิเคราะห์การออกเสียงเชิงลึกด้วย AI</h4>
           <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Deep AI Pronunciation Analysis (Whisper)</p>
+          <p style={{ lineHeight: 1.8, marginTop: 12 }} dangerouslySetInnerHTML={{ __html: highlightTranscript }} />
           <p style={{ marginTop: 8 }}>
             ความมั่นใจโดยรวมของ AI: <strong>{report.pronunciation.overallConfidencePct}%</strong>
           </p>
@@ -307,10 +368,73 @@ export function SpeakingAssessmentReport({
                   <span style={{ margin: "0 8px" }}>→</span>
                   <span style={{ color: "#dc2626", textDecoration: "line-through", fontWeight: 700 }}>สิ่งที่ AI ได้ยิน: {w.heard}</span>
                 </p>
+                <button
+                  type="button"
+                  onClick={() => speakWord(w.intended)}
+                  style={{ marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white", padding: "4px 8px", fontSize: 12, fontWeight: 700 }}
+                >
+                  ▶ Listen pronunciation
+                </button>
                 <div style={{ height: 7, background: "#e2e8f0", borderRadius: 9999, marginTop: 8 }}>
                   <div style={{ width: `${w.confidencePct}%`, background: "#f59e0b", height: 7, borderRadius: 9999 }} />
                 </div>
                 <p style={{ margin: "6px 0 0", fontSize: 12, color: "#64748b" }}>{w.confidencePct}% confidence</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
+          <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>Band rationale per criterion</h4>
+          <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Checklist-based reason for each criterion band</p>
+          <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+            {report.bandRationale.map((r, idx) => (
+              <div key={idx} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10, background: "#f8fafc" }}>
+                <p style={{ margin: 0, fontWeight: 800 }}>{r.title} · Band {r.currentBand.toFixed(1)}</p>
+                <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                  {r.checklistHits.map((hit, i) => (
+                    <li key={i} style={{ fontSize: 13 }}>{hit}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
+          <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>Detected evidence</h4>
+          <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Factual evidence extracted from transcript/audio</p>
+          <ul style={{ marginTop: 10, marginBottom: 0, paddingLeft: 18 }}>
+            {report.detectedEvidence.map((e, idx) => (
+              <li key={idx} style={{ fontSize: 13 }}>{e}</li>
+            ))}
+          </ul>
+        </section>
+
+        <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
+          <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>Actionable fixes</h4>
+          <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Concrete step+1 improvements for next attempt</p>
+          <ul style={{ marginTop: 10, marginBottom: 0, paddingLeft: 18 }}>
+            {report.actionableFixes.map((e, idx) => (
+              <li key={idx} style={{ fontSize: 13 }}>{e}</li>
+            ))}
+          </ul>
+        </section>
+
+        <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
+          <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>Next Band Plan</h4>
+          <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Current band to next target with exact tasks</p>
+          <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+            {report.nextBandPlan.map((plan, idx) => (
+              <div key={idx} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10 }}>
+                <p style={{ margin: 0, fontWeight: 800 }}>
+                  {plan.key}: {plan.currentBand.toFixed(1)} → {plan.targetBand.toFixed(1)}
+                </p>
+                <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                  {plan.tasks.map((task, i) => (
+                    <li key={i} style={{ fontSize: 13 }}>{task}</li>
+                  ))}
+                </ul>
               </div>
             ))}
           </div>
@@ -351,6 +475,20 @@ export function SpeakingAssessmentReport({
   return (
     <div className="sp-report">
       <ReportSection title="Band justification">
+        <p className="sp-criterion-summary-en" style={{ borderLeft: `6px solid ${feedbackColor}`, paddingLeft: 8 }}>
+          MODEL USED: {feedbackModelLabel}{result.feedbackModel ? ` (${result.feedbackModel})` : ""}
+        </p>
+        <div
+          title="Feedback source"
+          style={{
+            width: 14,
+            height: 14,
+            borderRadius: 9999,
+            background: feedbackColor,
+            border: "1px solid #cbd5e1",
+            marginBottom: 8,
+          }}
+        />
         <p className="sp-criterion-summary-en">{result.overall.englishSummary}</p>
         <p className="sp-criterion-summary-th">{result.overall.thaiSummary}</p>
         <p className="sp-criterion-summary-en">

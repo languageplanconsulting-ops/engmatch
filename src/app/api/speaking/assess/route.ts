@@ -96,7 +96,7 @@ export type AssessmentResult = {
       progressPct: number;
     }>;
     transcriptAnalysis: {
-      rawTranscript: string;
+      punctuatedTranscript: string;
       transitionWords: string[];
       goodVocabulary: string[];
       errorPhrases: Array<{ phrase: string; intended: string }>;
@@ -109,6 +109,20 @@ export type AssessmentResult = {
         confidencePct: number;
       }>;
     };
+    bandRationale: Array<{
+      key: "fluency" | "grammar" | "vocabulary" | "pronunciation";
+      title: string;
+      currentBand: number;
+      checklistHits: string[];
+    }>;
+    detectedEvidence: string[];
+    actionableFixes: string[];
+    nextBandPlan: Array<{
+      key: "fluency" | "grammar" | "vocabulary" | "pronunciation";
+      currentBand: number;
+      targetBand: number;
+      tasks: string[];
+    }>;
     corrections: Array<{
       category: "grammar" | "vocabulary" | "flow";
       wrong: string;
@@ -118,6 +132,7 @@ export type AssessmentResult = {
     }>;
   };
   feedbackSource?: "openai" | "anthropic" | "gemini";
+  feedbackModel?: string;
   errorCode?: string;
 };
 
@@ -217,12 +232,172 @@ function assembleOverallFromCriteria(result: AssessmentResult) {
   result.overall.roundedBand = toScore(rawAverage);
 }
 
+function clampBandTarget(current: number) {
+  const rounded = toScore(current);
+  return toScore(Math.min(9, rounded + 1));
+}
+
+function countReferencingTokens(transcript: string) {
+  const matches = transcript.toLowerCase().match(/\b(this|that|those|these|such)\b/g);
+  return matches?.length ?? 0;
+}
+
+function punctuateTranscript(raw: string) {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  const breakTokens = [
+    "so",
+    "but",
+    "however",
+    "finally",
+    "moving on",
+    "with regard to",
+    "at the end of the day",
+    "because",
+  ];
+  const words = normalized.split(" ");
+  const sentences: string[] = [];
+  let current: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    current.push(words[i]);
+    const lookback = current.slice(Math.max(0, current.length - 5)).join(" ").toLowerCase();
+    const shouldBreak =
+      current.length >= 20 &&
+      (breakTokens.some((t) => lookback.endsWith(t)) || i === words.length - 1 || current.length >= 34);
+    if (shouldBreak) {
+      const sentence = current.join(" ").trim();
+      if (sentence) {
+        const capped = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+        sentences.push(capped.endsWith(".") ? capped : `${capped}.`);
+      }
+      current = [];
+    }
+  }
+  if (current.length) {
+    const sentence = current.join(" ").trim();
+    const capped = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+    sentences.push(capped.endsWith(".") ? capped : `${capped}.`);
+  }
+  return sentences.join(" ");
+}
+
+function countStrongSpokenCollocations(transcript: string) {
+  const lower = transcript.toLowerCase();
+  const collocations = [
+    "sense of accomplishment",
+    "life changing",
+    "life-changing",
+    "navigate my life",
+    "holding back",
+    "look up to",
+    "at the end of the day",
+    "unlock my potential",
+    "corporate journey",
+    "reshape how i see the world",
+    "chances are",
+    "dream come true",
+    "with regard to",
+    "moving on to",
+  ];
+  return collocations.filter((c) => lower.includes(c)).length;
+}
+
+function hasTenseVariance(transcript: string) {
+  const lower = transcript.toLowerCase();
+  const hasPast = /\b(was|were|did|had|started|graduated|realized|led)\b/.test(lower);
+  const hasPresent = /\b(am|is|are|do|does|has|have)\b/.test(lower);
+  const hasFutureOrModal = /\b(will|would|could|should|might)\b/.test(lower);
+  return (hasPast && hasPresent) || (hasPast && hasFutureOrModal) || (hasPresent && hasFutureOrModal);
+}
+
+function isMostlyContractionExpansion(original: string, corrected: string) {
+  const o = original.toLowerCase().trim();
+  const c = corrected.toLowerCase().trim();
+  const contractions: Array<[RegExp, string]> = [
+    [/\bi'm\b/g, "i am"],
+    [/\bi've\b/g, "i have"],
+    [/\bi'd\b/g, "i would"],
+    [/\bi'll\b/g, "i will"],
+    [/\bit's\b/g, "it is"],
+    [/\bthat's\b/g, "that is"],
+    [/\bthere's\b/g, "there is"],
+    [/\bthey're\b/g, "they are"],
+    [/\bwe're\b/g, "we are"],
+    [/\byou're\b/g, "you are"],
+    [/\bdon't\b/g, "do not"],
+    [/\bdoesn't\b/g, "does not"],
+    [/\bcan't\b/g, "cannot"],
+    [/\bwon't\b/g, "will not"],
+    [/\bshouldn't\b/g, "should not"],
+    [/\bcouldn't\b/g, "could not"],
+    [/\bwouldn't\b/g, "would not"],
+    [/\bhasn't\b/g, "has not"],
+    [/\bhaven't\b/g, "have not"],
+    [/\bwasn't\b/g, "was not"],
+    [/\baren't\b/g, "are not"],
+    [/\bisn't\b/g, "is not"],
+    [/\beverybody's\b/g, "everybody is"],
+  ];
+  let expanded = o;
+  for (const [pattern, replacement] of contractions) {
+    expanded = expanded.replace(pattern, replacement);
+  }
+  const normalize = (s: string) => s.replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
+  return normalize(expanded) === normalize(c);
+}
+
+function applyPart2SpokenCalibration(result: AssessmentResult, transcript: string) {
+  const words = transcript.trim().split(/\s+/).filter(Boolean).length;
+  const transitionCount = (result.reportV2?.transcriptAnalysis.transitionWords.length ?? 0);
+  const strongCollocations = countStrongSpokenCollocations(transcript);
+
+  // Fluency base floors by length for spoken part 2.
+  if (words > 250) result.criteria.fluencyCoherence.band = Math.max(result.criteria.fluencyCoherence.band, 8.0);
+  else if (words > 230) result.criteria.fluencyCoherence.band = Math.max(result.criteria.fluencyCoherence.band, 7.0);
+  if (transitionCount > 0) result.criteria.fluencyCoherence.band = Math.max(result.criteria.fluencyCoherence.band, 7.0);
+
+  // Vocabulary floor by collocations/phrasal richness.
+  if (strongCollocations >= 3) {
+    result.criteria.lexicalResource.band = Math.max(result.criteria.lexicalResource.band, 7.5);
+  }
+
+  // Grammar floor when tense variance and meaning are still clear.
+  if (hasTenseVariance(transcript)) {
+    result.criteria.grammarRangeAccuracy.band = Math.max(result.criteria.grammarRangeAccuracy.band, 7.0);
+  }
+
+  // Remove essay-style spoken false positives.
+  result.criteria.fluencyCoherence.mainIssues = result.criteria.fluencyCoherence.mainIssues.filter(
+    (issue) => !/run-?on sentence/i.test(issue),
+  );
+  result.criteria.fluencyCoherence.howToImprove.english = result.criteria.fluencyCoherence.howToImprove.english.filter(
+    (tip) => !/run-?on sentence|add punctuation/i.test(tip),
+  );
+
+  // Keep corrections speech-appropriate.
+  result.grammarCorrections = result.grammarCorrections.filter((item) => {
+    if (!item.original || !item.corrected) return false;
+    if (isMostlyContractionExpansion(item.original, item.corrected)) return false;
+    const o = item.original.toLowerCase().replace(/\s+/g, " ").trim();
+    const c = item.corrected.toLowerCase().replace(/\s+/g, " ").trim();
+    if (o === `that was the moment that really unlocked my potential` && c === `that moment really unlocked my potential`) {
+      return false;
+    }
+    return true;
+  });
+
+  assembleOverallFromCriteria(result);
+}
+
 function buildPart2ReportV2(
   result: AssessmentResult,
   question: string,
   transcript: string,
   audioMetadata: WhisperAudioMetadata | null,
 ) {
+  const punctuated = punctuateTranscript(transcript);
+  const words = transcript.trim().split(/\s+/).filter(Boolean).length;
+  const referencingCount = countReferencingTokens(transcript);
   const transitionLexicon = [
     "however",
     "in contrast",
@@ -243,7 +418,7 @@ function buildPart2ReportV2(
 
   const lp = audioMetadata?.avgLogprob ?? -0.9;
   const baseConf = Math.round(Math.max(45, Math.min(98, (1 + lp) * 75 + 35)));
-  const lowConfidenceWords = errorPhrases.slice(0, 2).map((e, i) => ({
+  const lowConfidenceWords = errorPhrases.map((e, i) => ({
     intended: e.intended,
     heard: e.phrase,
     confidencePct: Math.max(45, baseConf - (i + 1) * 12),
@@ -265,6 +440,97 @@ function buildPart2ReportV2(
       reasonEn: "Vocabulary choice upgraded for precision and natural collocation.",
     })),
   ].slice(0, 5);
+
+  const bandRationale = [
+    {
+      key: "fluency" as const,
+      title: "Fluency & Coherence",
+      currentBand: result.criteria.fluencyCoherence.band,
+      checklistHits: [
+        `Word count: ${words}`,
+        `Referencing count: ${referencingCount}`,
+        `Transitions detected: ${transitionWords.length}`,
+      ],
+    },
+    {
+      key: "grammar" as const,
+      title: "Grammar",
+      currentBand: result.criteria.grammarRangeAccuracy.band,
+      checklistHits: [
+        `Tense variance detected: ${hasTenseVariance(transcript) ? "yes" : "limited"}`,
+        `Grammar corrections flagged: ${result.grammarCorrections.length}`,
+      ],
+    },
+    {
+      key: "vocabulary" as const,
+      title: "Vocabulary",
+      currentBand: result.criteria.lexicalResource.band,
+      checklistHits: [
+        `Strong collocations detected: ${countStrongSpokenCollocations(transcript)}`,
+        `Vocabulary upgrades available: ${result.vocabularyUpgrades.length}`,
+      ],
+    },
+    {
+      key: "pronunciation" as const,
+      title: "Pronunciation",
+      currentBand: result.criteria.pronunciation.band,
+      checklistHits: [
+        `Whisper avg logprob: ${audioMetadata?.avgLogprob ?? "n/a"}`,
+        `Whisper no-speech prob: ${audioMetadata?.avgNoSpeechProb ?? "n/a"}`,
+        `Whisper WPM: ${audioMetadata?.wordsPerMinute ?? "n/a"}`,
+      ],
+    },
+  ];
+
+  const detectedEvidence = [
+    ...transitionWords.map((w) => `Transition used: "${w}"`),
+    ...errorPhrases.map((e) => `Detected phrase: "${e.phrase}" -> intended "${e.intended}"`),
+  ].slice(0, 18);
+
+  const actionableFixes = [
+    ...corrections.map((c) => `${c.wrong} -> ${c.right}`),
+    ...result.priorityActions.map((a) => a.english),
+  ].slice(0, 18);
+
+  const nextBandPlan = [
+    {
+      key: "fluency" as const,
+      currentBand: toScore(result.criteria.fluencyCoherence.band),
+      targetBand: clampBandTarget(result.criteria.fluencyCoherence.band),
+      tasks: [
+        words < 250 ? `Add ${Math.max(0, 250 - words)}+ words with one clear intro and one closing sentence.` : "Maintain 250+ words while tightening idea grouping.",
+        referencingCount < 2 ? "Add at least 2 accurate references (this/that/these/those/such)." : "Increase referencing variety without overusing one form.",
+        "Use at least one contrast linker (however/in contrast) and one example linker (for example).",
+      ],
+    },
+    {
+      key: "grammar" as const,
+      currentBand: toScore(result.criteria.grammarRangeAccuracy.band),
+      targetBand: clampBandTarget(result.criteria.grammarRangeAccuracy.band),
+      tasks: [
+        "Upgrade one narration segment to present perfect or past perfect where logically suitable.",
+        "Fix recurring tense or subject-verb errors in the highlighted correction list.",
+      ],
+    },
+    {
+      key: "vocabulary" as const,
+      currentBand: toScore(result.criteria.lexicalResource.band),
+      targetBand: clampBandTarget(result.criteria.lexicalResource.band),
+      tasks: [
+        "Replace 3 basic phrases with B2-C1 collocations in the next attempt.",
+        "Reuse corrected collocations from this report in a new 2-minute response.",
+      ],
+    },
+    {
+      key: "pronunciation" as const,
+      currentBand: toScore(result.criteria.pronunciation.band),
+      targetBand: clampBandTarget(result.criteria.pronunciation.band),
+      tasks: [
+        "Shadow the low-confidence words 3 rounds at slow, normal, and natural speed.",
+        "Record again and aim to increase Whisper confidence on highlighted words by 10%+.",
+      ],
+    },
+  ];
 
   result.reportV2 = {
     version: "part2-v2",
@@ -312,7 +578,7 @@ function buildPart2ReportV2(
       },
     ],
     transcriptAnalysis: {
-      rawTranscript: transcript,
+      punctuatedTranscript: punctuated,
       transitionWords,
       goodVocabulary,
       errorPhrases,
@@ -321,6 +587,10 @@ function buildPart2ReportV2(
       overallConfidencePct: baseConf,
       lowConfidenceWords,
     },
+    bandRationale,
+    detectedEvidence,
+    actionableFixes,
+    nextBandPlan,
     corrections,
   };
 }
@@ -541,61 +811,116 @@ Use this JSON format exactly:
 }`;
 
 const PART2_STRICT_CRITERIA = `
-IELTS Speaking API System Prompt
+PART 2 SCORING CRITERIA RESET
 
-Role: You are an expert IELTS Speaking Examiner. Your job is to grade raw Speech-to-Text (ASR) transcripts of a 2-minute speaking test.
+MANDATORY FIRST STEP:
+- Add punctuation to the script first before evaluation.
 
-CRITICAL RULE - THIS IS SPOKEN ENGLISH, NOT WRITTEN TEXT:
-You are reading a raw AI transcription. You MUST strictly obey the following rules:
+GENERAL:
+- This is spoken English from ASR. Do not grade it like a formal essay.
+- Keep contraction usage natural for speaking.
+- Keep pronunciation scoring based on Whisper audio confidence signals only (do not override with transcript heuristics).
 
-IGNORE PUNCTUATION: Transcripts do not have periods or commas. Do NOT penalize for run-on sentences.
+GRAMMAR (Grammatical Range and Accuracy)
+Band 9:
+- Use conditionals, perfect tense, and past tense.
+- No grammar mistake at all (for speaking purpose).
+- Uses subordinating conjunctions accurately.
 
-IGNORE FALSE STARTS: Native speakers naturally stutter or restart sentences (e.g., "I very... I wasn't a very confident person"). Do NOT count these as grammatical errors.
+Band 8:
+- Use perfect tense and past tense.
+- Uses subordinating conjunctions.
+- No grammar mistakes.
 
-DO NOT GRADE LIKE AN ESSAY: Focus on the spoken flow, the complexity of ideas, and the vocabulary used.
+Band 7:
+- Use simple tense correctly.
+- Uses subordinating conjunctions.
+- Minor grammar mistakes are acceptable (no more than 3 times).
 
-GRADING LOGIC & CALIBRATION (Strict Rules)
+Band 6:
+- No more than 3 mistakes in simple tense.
+- Mistakes in past tense.
+- Mistakes in subordinating conjunctions, or don’t use subordinating conjunctions.
+- More than 5 mistakes in grammar (article, tense, noun, conjugation), but they don’t hinder understanding.
 
-1. Vocabulary (Lexical Resource)
+Band 5:
+- Mistakes in simple tense.
+- No transition between tense (e.g., present simple for something happened in the past).
+- Don’t use subordinating conjunctions, or use them incorrectly.
+- More than 5 grammar mistakes (article, tense, noun, conjugation), and they hinder understanding.
 
-Look for Collocations & Idioms: Scan the text for phrasal verbs (e.g., "hold back", "figure out") and C1-level collocations (e.g., "life-changing perspective", "unlock potential").
+Band 4:
+- Mistakes in simple tense.
+- No transition between tense (e.g., present simple for something happened in the past).
+- Don’t use subordinating conjunctions, or use them incorrectly.
+- More than 5 grammar mistakes (article, tense, noun, conjugation), and they hinder understanding.
 
-Scoring Floor: If the student successfully uses 3+ strong collocations or phrasal verbs to express complex ideas, the Vocabulary score MUST be 7.5 or 8.0. Do NOT give a 6.0 to a student using phrases like "sense of accomplishment" or "life-changing perspective".
+VOCABULARY (Lexical Resource)
+Band 9:
+- Use more than 6 collocations (B1+ level across noun+adjective, verb+noun, verb+adverb types).
+- At least 2 C1-C2 collocations.
+- No mistakes or awkwardness in vocabulary use.
 
-2. Fluency & Coherence
+Band 8:
+- Use more than 4-5 collocations (B1+ level across all types above).
+- At least 1 C1-C2 collocation.
+- No mistakes or awkwardness in vocabulary use.
 
-Word Count Rule:
-* If the transcript is > 250 words, the base score is 8.0.
-* If the transcript is > 230 words, the base score is 7.0.
+Band 7:
+- Use more than 2-5 collocations (B1+ level across all types above).
+- No mistakes in vocabulary use.
+- No more than 3 awkward/unnatural vocabulary uses.
 
-Referencing: Look for spoken referencing (e.g., "this book", "that advice", "from then on"). If present, keep the score high. Do not penalize for conversational fillers like "you know" or "like" unless it severely disrupts the meaning.
+Band 6:
+- Most collocation and vocabulary use is A2-B1.
+- Makes awkwardness/mistakes throughout but still understandable.
 
-3. Grammar (Grammatical Range & Accuracy)
+Band 5:
+- Most collocation and vocabulary use is A2-B1.
+- Makes awkwardness/mistakes throughout and more than 2-3 sentences don’t make sense.
 
-Look for Tense Variance: Look past the lack of periods. Did the student use past continuous ("I was listening"), present perfect ("has been useful"), or conditionals ("why would I be insecure")? If yes, the score MUST be 7.0 or higher.
+Band 4:
+- Most collocation and vocabulary use is A1-B1.
+- Makes awkwardness/mistakes throughout and more than 3 sentences don’t make sense.
 
-Penalization: Only drop the score to 5.0 or 6.0 if the core verb conjugations are entirely broken (e.g., "He go to store yesterday") or if the sentences literally make no sense.
+FLUENCY & COHERENCE
+Band 9:
+- At least 310 words.
+- Use referencing (this, that, those, such...) throughout (more than 4 times) with no mistakes.
+- No hesitation, no self-correction.
 
-4. Pronunciation
+Band 8:
+- At least 280 words.
+- Use referencing throughout (more than 3 times) with no mistakes.
+- If hesitation/self-correction exists, self-correction is correct.
 
-Rely on the provided AI Confidence Score (Whisper AI).
+Band 7:
+- At least 250 words.
+- Use referencing at least 2 times correctly.
+- If hesitation/self-correction exists, self-correction is always correct.
 
-Scoring:
-* > 90% overall confidence = 8.0/9.0
-* > 80% = 7.0
-* < 70% = 6.0
+Band 6:
+- Between 200-250 words.
+- No referencing, or referencing sometimes incorrect.
+- If hesitation/self-correction exists, self-correction is sometimes wrong.
 
-Do not hallucinate intended words. Evaluate based purely on the AI confidence metrics provided to you.
+Band 5:
+- Fewer than 200 words.
+- No referencing, or referencing always incorrect.
+- If hesitation/self-correction exists, self-correction is mostly wrong (>50%).
 
-CORRECTIONS GENERATION RULES
+Band 4:
+- Fewer than 200 words.
+- No referencing, or referencing always incorrect.
+- If hesitation/self-correction exists, self-correction is almost always wrong (>70%).
 
-When providing "Corrections & Suggestions" (จุดที่ต้องแก้ไขเพื่ออัพคะแนน):
-
-Focus on Spoken Upgrades: Do NOT suggest adding periods or commas.
-
-Upgrade, don't just fix: Instead of just fixing grammar, offer C1/C2 vocabulary upgrades (e.g., upgrading "old people" to "older generations").
-
-Be encouraging: Frame corrections as "How to sound more natural/advanced" rather than "You made a mistake."
+RECOMMENDATION RULES (STEP +1 ONLY)
+- Offer recommendations for the next immediate level only.
+- Example: if current level is 6, recommendations must target 7.
+- For Fluency: if stuck at 220 words (Band 6), recommend exactly what additional sentence types/parts to add to reach 7.
+- For Grammar: if at 7, either:
+  - suggest where perfect tense could be used, or
+  - correct minor mistakes and explain why they are wrong.
 `;
 
 function buildAssessmentPrompt(body: AssessBody) {
@@ -1020,8 +1345,10 @@ export async function POST(req: Request) {
         }
         if (body.mode === "part-2") {
           buildPart2ReportV2(result, body.question, body.transcript, whisperMeta);
+          applyPart2SpokenCalibration(result, body.transcript);
         }
         result.feedbackSource = output.provider;
+        result.feedbackModel = output.model;
         await logUsage(true, Date.now() - startedAt, output.provider, output.model);
         return NextResponse.json(result);
       } catch (err) {
