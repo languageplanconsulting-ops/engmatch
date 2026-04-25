@@ -1,0 +1,185 @@
+import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { POST as assessSpeaking } from "@/app/api/speaking/assess/route";
+
+type CreateSubmissionBody = {
+  prompt: string;
+  transcript: string;
+  audioUrl?: string;
+  mode?: "part-1" | "part-2" | "part-3";
+  packId?: string;
+  questionId?: string;
+};
+
+type WhisperVerboseResponse = {
+  text?: string;
+  language?: string;
+  duration?: number;
+  segments?: Array<{
+    id?: number;
+    start?: number;
+    end?: number;
+    avg_logprob?: number;
+    no_speech_prob?: number;
+    compression_ratio?: number;
+  }>;
+};
+
+async function buildWhisperAudioMetadata(audioUrl: string, prompt: string, transcript: string) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const audioRes = await fetch(audioUrl);
+    if (!audioRes.ok) return null;
+    const contentType = audioRes.headers.get("content-type") || "audio/webm";
+    const ext = contentType.includes("mpeg")
+      ? "mp3"
+      : contentType.includes("wav")
+        ? "wav"
+        : contentType.includes("mp4")
+          ? "m4a"
+          : "webm";
+    const audioBuffer = await audioRes.arrayBuffer();
+    const file = new File([audioBuffer], `speaking.${ext}`, { type: contentType });
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("model", process.env.OPENAI_WHISPER_MODEL || "whisper-1");
+    form.append("response_format", "verbose_json");
+    form.append("prompt", prompt);
+    form.append("language", "en");
+
+    const whisperRes = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+    if (!whisperRes.ok) return null;
+    const whisper = (await whisperRes.json()) as WhisperVerboseResponse;
+
+    const segmentCount = whisper.segments?.length ?? 0;
+    const avgLogprob =
+      segmentCount > 0
+        ? (whisper.segments ?? []).reduce((sum, s) => sum + (s.avg_logprob ?? 0), 0) / segmentCount
+        : null;
+    const avgNoSpeechProb =
+      segmentCount > 0
+        ? (whisper.segments ?? []).reduce((sum, s) => sum + (s.no_speech_prob ?? 0), 0) / segmentCount
+        : null;
+    const durationSec = Number(whisper.duration ?? 0);
+    const transcriptWords = transcript.trim().split(/\s+/).filter(Boolean).length;
+    const wordsPerMinute =
+      durationSec > 0 ? Math.round((transcriptWords / durationSec) * 60) : null;
+
+    return {
+      source: "openai-whisper",
+      model: process.env.OPENAI_WHISPER_MODEL || "whisper-1",
+      language: whisper.language ?? "unknown",
+      durationSec: durationSec > 0 ? Number(durationSec.toFixed(2)) : null,
+      segmentCount,
+      avgLogprob: avgLogprob !== null ? Number(avgLogprob.toFixed(3)) : null,
+      avgNoSpeechProb: avgNoSpeechProb !== null ? Number(avgNoSpeechProb.toFixed(3)) : null,
+      wordsPerMinute,
+      whisperTranscriptPreview: (whisper.text ?? "").slice(0, 240),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function GET() {
+  const items = await prisma.speakingSubmission.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 30,
+  });
+  return NextResponse.json({ items });
+}
+
+export async function POST(req: Request) {
+  let body: CreateSubmissionBody;
+  try {
+    body = (await req.json()) as CreateSubmissionBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  const prompt = body.prompt?.trim();
+  const transcript = body.transcript?.trim();
+  if (!prompt || !transcript) {
+    return NextResponse.json({ error: "prompt and transcript are required." }, { status: 400 });
+  }
+
+  const audioMetadata =
+    typeof body.audioUrl === "string" && body.audioUrl.trim()
+      ? await buildWhisperAudioMetadata(body.audioUrl, prompt, transcript)
+      : null;
+
+  const assessReq = new Request("https://internal/api/speaking/assess", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question: prompt,
+      transcript,
+      mode: body.mode === "part-2" ? "part-2" : body.mode === "part-3" ? "part-3" : "part-1",
+      runtimeMode: "practice",
+      audioMetadata,
+    }),
+  });
+  const assessRes = await assessSpeaking(assessReq);
+  const aiReport = (await assessRes.json()) as Prisma.InputJsonValue;
+  const overallBand =
+    typeof aiReport === "object" && aiReport !== null && "overall" in aiReport
+      ? typeof aiReport.overall === "number"
+        ? aiReport.overall
+        : Number(aiReport.overall ?? 0)
+      : 0;
+  const effectivePackId = body.packId ?? "manual-report";
+  await prisma.speakingPack.upsert({
+    where: { packId: effectivePackId },
+    update: {},
+    create: {
+      packId: effectivePackId,
+      mode: body.mode ?? "part-3",
+      part: body.mode ?? "part-3",
+      name: "Manual speaking report",
+      topic: "Manual",
+      questionCount: 1,
+      uploadedAt: new Date(),
+      payload: {
+        id: effectivePackId,
+        mode: body.mode ?? "part-3",
+        name: "Manual speaking report",
+        topic: "Manual",
+      } as Prisma.InputJsonValue,
+    },
+  });
+
+  const attempt = await prisma.speakingAttempt.create({
+    data: {
+      packId: effectivePackId,
+      mode: body.mode ?? "part-3",
+      status: "completed",
+      currentBand: Number.isFinite(overallBand) ? overallBand : null,
+      bestBand: Number.isFinite(overallBand) ? overallBand : null,
+    },
+  });
+  const created = await prisma.speakingSubmission.create({
+    data: {
+      attemptId: attempt.id,
+      questionId: body.questionId ?? "manual-question",
+      prompt,
+      transcript,
+      audioUrl: body.audioUrl ?? null,
+      aiReport,
+      overallBand: Number.isFinite(overallBand) ? overallBand : null,
+      status: "ai_ready",
+      feedbackReadyAt: new Date(),
+      feedbackProvider: "openai",
+      feedbackModel: process.env.OPENAI_SPEAKING_MODEL ?? "gpt-4o-mini",
+    },
+  });
+
+  return NextResponse.json({ item: created }, { status: 201 });
+}

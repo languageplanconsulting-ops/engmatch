@@ -240,6 +240,107 @@ export function SpeakingAssessmentReport({
   }
 
   if (!result) return null;
+  if (mode === "part-2" && result.reportV2) {
+    const report = result.reportV2;
+    return (
+      <div style={{ background: "#f8fafc", borderRadius: 16, padding: 16 }}>
+        <section style={{ background: "#004aad", color: "white", borderRadius: 16, padding: 20, marginBottom: 16 }}>
+          <p style={{ color: "#ffcc00", fontWeight: 700, marginBottom: 8 }}>Part 2: พูดเดี่ยว 2 นาที</p>
+          <h3 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>รายงานผลการประเมินการพูด</h3>
+          <p style={{ opacity: 0.88, marginTop: 6, marginBottom: 10 }}>Speaking Assessment Report</p>
+          <p style={{ background: "rgba(255,255,255,0.12)", borderRadius: 8, padding: 10, marginBottom: 0 }}>
+            <strong>หัวข้อ (Topic): </strong>{report.header.topicEn}
+          </p>
+          <div style={{ marginTop: 14, display: "inline-flex", background: "white", color: "#004aad", border: "4px solid #ffcc00", borderRadius: 9999, width: 90, height: 90, alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 30 }}>
+            {report.header.overallBand.toFixed(1)}
+          </div>
+        </section>
+
+        <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 12, marginBottom: 16 }}>
+          {report.rubricCards.map((card) => (
+            <div key={card.key} style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
+                <div>
+                  <h4 style={{ margin: 0, color: "#004aad", fontSize: 18, fontWeight: 800 }}>{card.titleTh}</h4>
+                  <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: 12 }}>{card.titleEn}</p>
+                </div>
+                <span style={{ background: "#004aad", color: "white", borderRadius: 9999, padding: "3px 10px", fontWeight: 700, fontSize: 13 }}>
+                  Band {card.band.toFixed(1)}
+                </span>
+              </div>
+              <div style={{ height: 8, background: "#e2e8f0", borderRadius: 9999, marginTop: 10 }}>
+                <div style={{ width: `${card.progressPct}%`, background: "#004aad", height: 8, borderRadius: 9999 }} />
+              </div>
+              <p style={{ marginTop: 10, marginBottom: 6, fontSize: 14 }}>{card.feedbackTh}</p>
+              <p style={{ marginTop: 0, color: "#64748b", fontSize: 12 }}>{card.feedbackEn}</p>
+            </div>
+          ))}
+        </section>
+
+        <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
+          <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>การวิเคราะห์บทพูด</h4>
+          <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Transcript Analysis</p>
+          <p style={{ lineHeight: 1.8, marginTop: 12 }}>{report.transcriptAnalysis.rawTranscript}</p>
+          {report.transcriptAnalysis.transitionWords.length > 0 && (
+            <p style={{ marginTop: 8, fontSize: 13 }}>
+              <strong>Good transitions:</strong> {report.transcriptAnalysis.transitionWords.join(", ")}
+            </p>
+          )}
+          {report.transcriptAnalysis.goodVocabulary.length > 0 && (
+            <p style={{ marginTop: 8, fontSize: 13 }}>
+              <strong>Good vocabulary:</strong> {report.transcriptAnalysis.goodVocabulary.join(", ")}
+            </p>
+          )}
+        </section>
+
+        <section style={{ background: "white", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16, marginBottom: 16 }}>
+          <h4 style={{ margin: 0, color: "#004aad", fontSize: 20, fontWeight: 800 }}>การวิเคราะห์การออกเสียงเชิงลึกด้วย AI</h4>
+          <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Deep AI Pronunciation Analysis (Whisper)</p>
+          <p style={{ marginTop: 8 }}>
+            ความมั่นใจโดยรวมของ AI: <strong>{report.pronunciation.overallConfidencePct}%</strong>
+          </p>
+          <div style={{ display: "grid", gap: 10 }}>
+            {report.pronunciation.lowConfidenceWords.map((w, idx) => (
+              <div key={idx} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10, background: "#f8fafc" }}>
+                <p style={{ margin: 0, fontSize: 13 }}>
+                  <span style={{ color: "#059669", fontWeight: 700 }}>สิ่งที่คุณตั้งใจพูด:</span> {w.intended}
+                  <span style={{ margin: "0 8px" }}>→</span>
+                  <span style={{ color: "#dc2626", textDecoration: "line-through", fontWeight: 700 }}>สิ่งที่ AI ได้ยิน: {w.heard}</span>
+                </p>
+                <div style={{ height: 7, background: "#e2e8f0", borderRadius: 9999, marginTop: 8 }}>
+                  <div style={{ width: `${w.confidencePct}%`, background: "#f59e0b", height: 7, borderRadius: 9999 }} />
+                </div>
+                <p style={{ margin: "6px 0 0", fontSize: 12, color: "#64748b" }}>{w.confidencePct}% confidence</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section style={{ background: "#f8fafc", borderRadius: 14, border: "1px solid #e2e8f0", padding: 16 }}>
+          <h4 style={{ margin: 0, color: "#004aad", fontSize: 22, fontWeight: 800 }}>จุดที่ต้องแก้ไขเพื่ออัพคะแนน</h4>
+          <p style={{ marginTop: 2, color: "#64748b", fontSize: 12 }}>Corrections & Suggestions</p>
+          <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+            {report.corrections.map((c, idx) => (
+              <div key={idx} style={{ position: "relative", background: "white", borderRadius: 10, border: "1px solid #e2e8f0", padding: 12 }}>
+                <button type="button" style={{ position: "absolute", top: 12, right: 12, background: "#ffcc00", color: "#004aad", borderRadius: 8, border: "none", padding: "4px 8px", fontWeight: 700 }}>
+                  Add to notebook
+                </button>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginRight: 128 }}>
+                  <span style={{ textDecoration: "line-through", color: "#ef4444", background: "#fef2f2", borderRadius: 6, padding: "2px 6px" }}>{c.wrong}</span>
+                  <span style={{ color: "#004aad", fontWeight: 700 }}>→</span>
+                  <span style={{ color: "#059669", background: "#ecfdf5", borderRadius: 6, padding: "2px 6px", fontWeight: 700 }}>{c.right}</span>
+                </div>
+                <div style={{ borderLeft: "4px solid #004aad", marginTop: 10, paddingLeft: 10 }}>
+                  <p style={{ margin: 0, fontSize: 14 }}>{c.reasonTh}</p>
+                  <p style={{ margin: "4px 0 0", fontSize: 12, color: "#64748b" }}>{c.reasonEn}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  }
   const transcriptEvidence = [
     ...(result.criteria.fluencyCoherence.evidenceFromTranscript ?? []),
     ...(result.criteria.lexicalResource.evidenceFromTranscript ?? []),

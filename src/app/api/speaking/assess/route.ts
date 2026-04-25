@@ -7,6 +7,7 @@ type AssessBody = {
   mode: "part-1" | "part-2" | "part-3";
   runtimeMode?: "mock" | "practice" | "intensive";
   previousOverall?: number;
+  audioMetadata?: unknown;
 };
 
 export type CriterionDetail = {
@@ -78,13 +79,249 @@ export type AssessmentResult = {
     english: string;
     thaiNote: string;
   };
+  reportV2?: {
+    version: "part2-v2";
+    header: {
+      topicTh: string;
+      topicEn: string;
+      overallBand: number;
+    };
+    rubricCards: Array<{
+      key: "fluency" | "grammar" | "vocabulary" | "pronunciation";
+      titleTh: string;
+      titleEn: string;
+      band: number;
+      feedbackTh: string;
+      feedbackEn: string;
+      progressPct: number;
+    }>;
+    transcriptAnalysis: {
+      rawTranscript: string;
+      transitionWords: string[];
+      goodVocabulary: string[];
+      errorPhrases: Array<{ phrase: string; intended: string }>;
+    };
+    pronunciation: {
+      overallConfidencePct: number;
+      lowConfidenceWords: Array<{
+        intended: string;
+        heard: string;
+        confidencePct: number;
+      }>;
+    };
+    corrections: Array<{
+      category: "grammar" | "vocabulary" | "flow";
+      wrong: string;
+      right: string;
+      reasonTh: string;
+      reasonEn: string;
+    }>;
+  };
   errorCode?: string;
+};
+
+type WhisperAudioMetadata = {
+  source?: string;
+  model?: string;
+  language?: string;
+  durationSec?: number | null;
+  segmentCount?: number | null;
+  avgLogprob?: number | null;
+  avgNoSpeechProb?: number | null;
+  wordsPerMinute?: number | null;
+  whisperTranscriptPreview?: string;
 };
 
 function toScore(v: unknown) {
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(9, Math.round(n * 2) / 2));
+}
+
+function parseWhisperMetadata(input: unknown): WhisperAudioMetadata | null {
+  if (!input || typeof input !== "object") return null;
+  const m = input as Record<string, unknown>;
+  if (m.source !== "openai-whisper") return null;
+  return {
+    source: String(m.source ?? ""),
+    model: String(m.model ?? ""),
+    language: String(m.language ?? ""),
+    durationSec: typeof m.durationSec === "number" ? m.durationSec : null,
+    segmentCount: typeof m.segmentCount === "number" ? m.segmentCount : null,
+    avgLogprob: typeof m.avgLogprob === "number" ? m.avgLogprob : null,
+    avgNoSpeechProb: typeof m.avgNoSpeechProb === "number" ? m.avgNoSpeechProb : null,
+    wordsPerMinute: typeof m.wordsPerMinute === "number" ? m.wordsPerMinute : null,
+    whisperTranscriptPreview: typeof m.whisperTranscriptPreview === "string" ? m.whisperTranscriptPreview : "",
+  };
+}
+
+function buildPronunciationFromWhisper(meta: WhisperAudioMetadata): CriterionDetail {
+  let band = 5.5;
+
+  // avg_logprob closer to 0 generally indicates clearer recognizability.
+  const lp = meta.avgLogprob ?? -0.9;
+  if (lp >= -0.45) band += 0.8;
+  else if (lp >= -0.7) band += 0.4;
+  else if (lp <= -1.15) band -= 0.6;
+
+  // Lower no-speech probability implies more stable voiced speech.
+  const ns = meta.avgNoSpeechProb ?? 0.2;
+  if (ns <= 0.08) band += 0.3;
+  else if (ns >= 0.35) band -= 0.4;
+
+  // Very high/low WPM often correlates with reduced clarity in learner speech.
+  const wpm = meta.wordsPerMinute ?? 0;
+  if (wpm >= 105 && wpm <= 175) band += 0.3;
+  else if (wpm > 0 && (wpm < 80 || wpm > 210)) band -= 0.4;
+
+  band = toScore(band);
+
+  return {
+    band,
+    englishExplanation:
+      "Pronunciation is estimated from Whisper audio-recognition confidence, speech continuity, and speaking rate, rather than transcript text alone.",
+    thaiExplanation:
+      "คะแนนการออกเสียงประเมินจากความมั่นใจของระบบรู้จำเสียง Whisper ความต่อเนื่องของเสียงพูด และความเร็วในการพูด ไม่ได้ดูเฉพาะข้อความถอดเสียงอย่างเดียว",
+    evidence: [
+      `Whisper avg logprob: ${meta.avgLogprob ?? "n/a"}`,
+      `No-speech probability: ${meta.avgNoSpeechProb ?? "n/a"}`,
+      `Estimated speaking rate: ${meta.wordsPerMinute ?? "n/a"} wpm`,
+    ],
+    mainIssues:
+      band >= 6
+        ? ["Minor clarity issues may still appear in fast sections."]
+        : ["Audio recognizability suggests pronunciation/clarity still limits listener comfort."],
+    howToImprove: {
+      english: [
+        "Slow down slightly and stress content words to improve recognizability.",
+        "Record 60-second answers and compare unclear segments with model pronunciation.",
+      ],
+      thai: [
+        "พูดช้าลงเล็กน้อยและเน้นคำสำคัญเพื่อให้ระบบและผู้ฟังจับคำได้ชัดขึ้น",
+        "อัดคำตอบ 60 วินาทีแล้วย้อนฟังช่วงที่ไม่ชัด จากนั้นฝึกออกเสียงซ้ำเป็นช่วงสั้นๆ",
+      ],
+    },
+    limitation:
+      "Whisper-based estimate is stronger than transcript-only scoring but still not a full human phonetic evaluation.",
+  };
+}
+
+function assembleOverallFromCriteria(result: AssessmentResult) {
+  const f = toScore(result.criteria.fluencyCoherence.band);
+  const l = toScore(result.criteria.lexicalResource.band);
+  const g = toScore(result.criteria.grammarRangeAccuracy.band);
+  const p = toScore(result.criteria.pronunciation.band);
+  const rawAverage = Math.round((((f + l + g + p) / 4) * 10)) / 10;
+  result.overall.rawAverage = rawAverage;
+  result.overall.roundedBand = toScore(rawAverage);
+}
+
+function buildPart2ReportV2(
+  result: AssessmentResult,
+  question: string,
+  transcript: string,
+  audioMetadata: WhisperAudioMetadata | null,
+) {
+  const transitionLexicon = [
+    "however",
+    "in contrast",
+    "with regard to",
+    "moving on to",
+    "finally",
+    "therefore",
+    "moreover",
+    "for example",
+  ];
+  const lower = transcript.toLowerCase();
+  const transitionWords = transitionLexicon.filter((w) => lower.includes(w)).slice(0, 8);
+  const goodVocabulary = result.vocabularyUpgrades.map((v) => v.better).filter(Boolean).slice(0, 8);
+  const errorPhrases = result.grammarCorrections
+    .map((g) => ({ phrase: g.original, intended: g.corrected }))
+    .filter((x) => x.phrase && x.intended)
+    .slice(0, 8);
+
+  const lp = audioMetadata?.avgLogprob ?? -0.9;
+  const baseConf = Math.round(Math.max(45, Math.min(98, (1 + lp) * 75 + 35)));
+  const lowConfidenceWords = errorPhrases.slice(0, 2).map((e, i) => ({
+    intended: e.intended,
+    heard: e.phrase,
+    confidencePct: Math.max(45, baseConf - (i + 1) * 12),
+  }));
+
+  const corrections = [
+    ...result.grammarCorrections.map((g) => ({
+      category: "grammar" as const,
+      wrong: g.original,
+      right: g.corrected,
+      reasonTh: g.thaiExplanation,
+      reasonEn: "Grammar accuracy and structure improved for clarity.",
+    })),
+    ...result.vocabularyUpgrades.map((v) => ({
+      category: "vocabulary" as const,
+      wrong: v.original,
+      right: v.better,
+      reasonTh: v.thaiExplanation,
+      reasonEn: "Vocabulary choice upgraded for precision and natural collocation.",
+    })),
+  ].slice(0, 5);
+
+  result.reportV2 = {
+    version: "part2-v2",
+    header: {
+      topicTh: "หัวข้อพูด Part 2",
+      topicEn: question,
+      overallBand: result.overall.roundedBand,
+    },
+    rubricCards: [
+      {
+        key: "fluency",
+        titleTh: "ความคล่องแคล่วและการเชื่อมโยง",
+        titleEn: "Fluency & Coherence",
+        band: result.criteria.fluencyCoherence.band,
+        feedbackTh: result.criteria.fluencyCoherence.thaiExplanation,
+        feedbackEn: result.criteria.fluencyCoherence.englishExplanation,
+        progressPct: Math.round((result.criteria.fluencyCoherence.band / 9) * 100),
+      },
+      {
+        key: "grammar",
+        titleTh: "ไวยากรณ์",
+        titleEn: "Grammar",
+        band: result.criteria.grammarRangeAccuracy.band,
+        feedbackTh: result.criteria.grammarRangeAccuracy.thaiExplanation,
+        feedbackEn: result.criteria.grammarRangeAccuracy.englishExplanation,
+        progressPct: Math.round((result.criteria.grammarRangeAccuracy.band / 9) * 100),
+      },
+      {
+        key: "vocabulary",
+        titleTh: "คำศัพท์",
+        titleEn: "Vocabulary",
+        band: result.criteria.lexicalResource.band,
+        feedbackTh: result.criteria.lexicalResource.thaiExplanation,
+        feedbackEn: result.criteria.lexicalResource.englishExplanation,
+        progressPct: Math.round((result.criteria.lexicalResource.band / 9) * 100),
+      },
+      {
+        key: "pronunciation",
+        titleTh: "การออกเสียง",
+        titleEn: "Pronunciation",
+        band: result.criteria.pronunciation.band,
+        feedbackTh: result.criteria.pronunciation.thaiExplanation,
+        feedbackEn: result.criteria.pronunciation.englishExplanation,
+        progressPct: Math.round((result.criteria.pronunciation.band / 9) * 100),
+      },
+    ],
+    transcriptAnalysis: {
+      rawTranscript: transcript,
+      transitionWords,
+      goodVocabulary,
+      errorPhrases,
+    },
+    pronunciation: {
+      overallConfidencePct: baseConf,
+      lowConfidenceWords,
+    },
+    corrections,
+  };
 }
 
 function parseJsonObject(text: string) {
@@ -302,8 +539,81 @@ Use this JSON format exactly:
   }
 }`;
 
+const PART2_STRICT_CRITERIA = `
+SPECIAL PART 2 RUBRIC (REPLACE DEFAULT RUBRIC FOR PART 2):
+
+PUNCTUATE THE SPEAKING SCRIPT BEFORE CORRECTION.
+
+Do NOT deduct score for natural hesitation/fillers like:
+"hm", "you know", "kind of like", etc.
+These are normal in speaking.
+
+Grammar
+Assessment of sentence structure, complexity, and grammatical accuracy.
+Band 9.0: Flawless & Advanced. 100% grammatically correct with zero mistakes. Uses C2-level advanced complex structures consistently (e.g., conditionals, subordinating/coordinating conjunctions, and complex tenses like past/future perfect).
+Band 8.0: Highly Accurate. Zero grammatical mistakes. Uses a mix of advanced and normal complex structures (advanced structures are slightly less frequent than Band 9). Relies entirely on complex structures with no simple structures used.
+Band 7.0: Mostly Accurate. Uses past, present, and future simple tenses correctly. Contains only minor mistakes (e.g., maximum of 1 or 2 incorrect uses of subordinating conjunctions, tenses, or conjugations).
+Band 6.0: Attempted Complexity. Attempts complex structures (e.g., using "with" or "which") but makes structural errors (e.g., confusing "but" with "although", or using the wrong tense when trying to be complex). Has a maximum of 6 basic grammar errors (e.g., missing articles like "I own house," or overusing "the" inappropriately).
+Band 5.0: Frequent Errors. Most sentences contain mistakes. Relies heavily on simple structures. Attempts at complex structures (like "even though" or "although") are almost always incorrect. Grammar mistakes begin to hinder clarity and understanding, causing sentences to not make sense.
+Band 4.0: Pervasive Errors. Mistakes in all sentences. Fails to use tenses correctly or at all (mixes them up completely). No complex structures attempted; heavily overuses the word "and". Has more than 3 sentences where errors lead to complete misunderstanding or lack of clarity.
+
+Vocabulary
+Assessment of word choice, collocations, and phrasing clarity.
+Band 9.0: Expert & Precise. Highly effective use of collocations. Zero vocabulary mistakes. Uses C1-C2 level vocabulary at least 2-3 times successfully. 100% clear.
+Band 8.0: Very Good. Uses a mix of collocations and common verbs (e.g., make, have, take). Contains some minor mistakes or unnatural phrasing when attempting C1/C2 vocabulary, which can occasionally cause slight unclarity.
+Band 7.0: Good & Effective. Effective vocabulary use featuring a mix of good collocations (must use at least 3-4 collocations effectively). Contains minor mistakes that do not hinder overall understanding.
+Band 6.0: Competent Range. Uses a wide range of vocabulary effectively. However, mistakes, misunderstandings, or lack of clarity occur specifically when they attempt advanced vocabulary or collocations.
+Band 5.0: Basic. Relies almost entirely on basic vocabulary. Fails to use collocations; attempts at collocations are consistently incorrect, leading to awkwardness, misunderstanding, or a lack of clarity.
+Band 4.0: Limited. Uses only simple vocabulary and makes frequent mistakes even with basic words, making the overall message highly unclear.
+
+Fluency & Organization
+Assessment of length, transitions, referencing, and structure (evaluated via speech-to-text logic).
+Band 9.0:
+* Length: 310+ words.
+* Criteria: Must effectively use transitional words (e.g., "however," "in contrast") AND referencing (e.g., "this," "these," "those," "such"). Both are strictly required.
+Band 8.0:
+* Length: 250+ words (cannot score 8 if under 250).
+* Criteria: Uses 1-2 transitional words perfectly. Must use some referencing. Any hesitations (like "well...") or mistakes are recovered seamlessly.
+Band 7.0:
+* Length: 230+ words.
+* Criteria: Uses transitional words (e.g., "moving on to," "with regard to") but may make some mistakes. Uses referencing occasionally (1-2 times) and mostly accurately.
+Band 6.0:
+* Length: 200+ words.
+* Criteria: Lacks transitional words (uses basic fillers like "then"). No clear structure (no intro, ending, or organization of ideas). Lacks referencing, or makes mistakes when attempting referencing/transitions.
+Band 5.0:
+* Length: 160-199 words.
+* Criteria: No referencing or transitional words. Zero organization; speaks randomly. Correlates with poor grammar/vocab. Has more than 3 parts of the response that make no sense at all.
+Band 4.0:
+* Length: Less than 160 words.
+* Criteria: Off-topic, out of context, and completely unstructured. No transitional words used.
+
+Pronunciation
+Algorithmic logic based on Whisper AI (assuming a sample answer of 100 words).
+Band 9.0 (Expert): < 2% Minor Errors, 0% Critical Errors. Whisper is almost completely confident in every single token. The pronunciation is highly precise.
+Band 8.0 (Very Good): < 5% Minor Errors, 0% Critical Errors. Easy to understand. Whisper caught a few minor phonetic slips (typical of an L1 accent) that do not impact clarity.
+Band 7.0 (Good): < 10% Minor Errors, < 2% Critical Errors. Can be understood without effort, though there are noticeable phonetic errors. A critical error (intelligibility drop) is very rare.
+Band 6.0 (Competent): < 20% Minor Errors, < 5% Critical Errors. Generally understood. Whisper flags multiple words as minor errors, and a few critical errors suggest occasional drops in clarity.
+Band 5.0 (Modest): < 30% Minor Errors, < 10% Critical Errors. Pronunciation features are used, but the frequency of critical errors (Whisper struggling to parse the audio) indicates noticeable strain for the listener.
+Band 4.0 (Limited): > 30% Minor Errors OR > 10% Critical Errors. Frequent mispronunciations. Whisper's high rate of low-confidence tokens proves the audio is fundamentally difficult to transcribe accurately.
+`;
+
 function buildAssessmentPrompt(body: AssessBody) {
+  const audioMetaText =
+    body.audioMetadata && typeof body.audioMetadata === "object"
+      ? JSON.stringify(body.audioMetadata)
+      : typeof body.audioMetadata === "string" && body.audioMetadata.trim()
+        ? body.audioMetadata.trim()
+        : "none";
   return `${ASSESSMENT_PROMPT_PREAMBLE}
+
+When audio metadata is provided, focus your scoring judgment for:
+- Fluency and Coherence
+- Lexical Resource
+- Grammatical Range and Accuracy
+from transcript evidence.
+Pronunciation may reference metadata but final pronunciation band can be adjusted downstream.
+
+${body.mode === "part-2" ? PART2_STRICT_CRITERIA : ""}
 
 Now assess this IELTS Speaking response.
 
@@ -317,7 +627,7 @@ Speech-to-text transcript:
 ${body.transcript}
 
 Audio metadata, if available:
-none`;
+${audioMetaText}`;
 }
 
 function fallbackAssessment(transcript: string, previousOverall: number | undefined): AssessmentResult {
@@ -699,6 +1009,16 @@ export async function POST(req: Request) {
             message: "Provider response normalized but roundedBand is 0.",
           });
           continue;
+        }
+        const whisperMeta = parseWhisperMetadata(body.audioMetadata);
+        if (whisperMeta) {
+          result.criteria.pronunciation = buildPronunciationFromWhisper(whisperMeta);
+          assembleOverallFromCriteria(result);
+          result.overall.reliabilityWarning =
+            "Pronunciation uses Whisper audio metadata; overall band is assembled from transcript criteria + audio-based pronunciation.";
+        }
+        if (body.mode === "part-2") {
+          buildPart2ReportV2(result, body.question, body.transcript, whisperMeta);
         }
         await logUsage(true, Date.now() - startedAt, output.provider, output.model);
         return NextResponse.json(result);
