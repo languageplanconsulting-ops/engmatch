@@ -166,7 +166,13 @@ function fallbackAssessment(transcript: string, previousOverall: number | undefi
 
 async function logUsage(success: boolean, latencyMs: number, errorCode?: string) {
   try {
-    await prisma.aiUsageEvent.create({
+    const usageDelegate = (
+      prisma as unknown as {
+        aiUsageEvent?: { create: (args: { data: Record<string, unknown> }) => Promise<unknown> };
+      }
+    ).aiUsageEvent;
+    if (!usageDelegate) return;
+    await usageDelegate.create({
       data: {
         feature: "speaking-assessment",
         endpoint: "/api/speaking/assess",
