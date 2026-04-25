@@ -497,7 +497,7 @@ async function callGemini(prompt: string, signal: AbortSignal) {
 async function withProviderTimeout<T>(
   providerName: "openai" | "anthropic" | "gemini",
   fn: (signal: AbortSignal) => Promise<T>,
-  timeoutMs = 20000,
+  timeoutMs = 75000,
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
