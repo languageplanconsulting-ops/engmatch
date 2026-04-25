@@ -128,8 +128,40 @@ export function SpeakingAssessmentReport({
         body: JSON.stringify({ question, transcript, mode, runtimeMode }),
       });
       if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error ?? "Assessment failed");
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          providerFailures?: string[];
+          providerDiagnostics?: Array<{
+            provider?: string;
+            model?: string;
+            keyDetected?: boolean;
+            keyName?: string | null;
+            stage?: string;
+            errorCode?: string;
+            message?: string;
+            status?: number;
+            responseSnippet?: string;
+          }>;
+        };
+        const providerMsg = Array.isArray(j.providerFailures) && j.providerFailures.length
+          ? `\nProvider failures: ${j.providerFailures.join(" | ")}`
+          : "";
+        const diagnosticsMsg = Array.isArray(j.providerDiagnostics) && j.providerDiagnostics.length
+          ? `\nDiagnostics:\n${j.providerDiagnostics
+            .map((d) =>
+              [
+                `- ${d.provider ?? "unknown"} (${d.model ?? "unknown-model"})`,
+                `stage=${d.stage ?? "unknown"}`,
+                `code=${d.errorCode ?? "unknown"}`,
+                `key=${d.keyDetected ? `present:${d.keyName ?? "detected"}` : "missing"}`,
+                d.status ? `status=${d.status}` : "",
+                d.message ? `msg=${d.message}` : "",
+                d.responseSnippet ? `snippet=${d.responseSnippet}` : "",
+              ].filter(Boolean).join(" | "),
+            )
+            .join("\n")}`
+          : "";
+        throw new Error((j.error ?? "Assessment failed") + providerMsg + diagnosticsMsg);
       }
       const data = (await res.json()) as AssessmentResult;
       setResult(data);

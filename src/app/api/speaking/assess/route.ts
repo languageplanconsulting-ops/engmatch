@@ -102,6 +102,30 @@ function firstEnv(...keys: string[]) {
   return "";
 }
 
+function firstEnvKey(...keys: string[]) {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value && value.trim()) return key;
+  }
+  return "";
+}
+
+function clip(text: string, max = 220) {
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+class ProviderCallError extends Error {
+  code: string;
+  status?: number;
+  responseSnippet?: string;
+  constructor(message: string, code: string, status?: number, responseSnippet?: string) {
+    super(message);
+    this.code = code;
+    this.status = status;
+    this.responseSnippet = responseSnippet;
+  }
+}
+
 const ASSESSMENT_PROMPT_PREAMBLE = `You are an expert IELTS Speaking examiner and bilingual English-Thai speaking coach.
 
 Assess the candidate using IELTS Speaking criteria:
@@ -397,7 +421,7 @@ function normalizeAssessmentResult(body: AssessBody, data: Record<string, unknow
 
 async function callOpenAI(prompt: string, signal: AbortSignal) {
   const apiKey = firstEnv("OPENAI_API_KEY", "CHATGPT_API_KEY");
-  if (!apiKey) throw new Error("OPENAI_API_KEY missing");
+  if (!apiKey) throw new ProviderCallError("Missing OpenAI key.", "missing_key");
   const model = process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini";
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -405,14 +429,19 @@ async function callOpenAI(prompt: string, signal: AbortSignal) {
     body: JSON.stringify({ model, max_output_tokens: 2500, input: prompt }),
     signal,
   });
-  if (!res.ok) throw new Error(`openai-${res.status}`);
+  if (!res.ok) {
+    const responseSnippet = clip(await res.text().catch(() => ""));
+    throw new ProviderCallError(`OpenAI HTTP ${res.status}`, "http_error", res.status, responseSnippet);
+  }
   const payload = (await res.json()) as { output_text?: string };
-  return { provider: "openai" as const, model, text: payload.output_text?.trim() ?? "" };
+  const text = payload.output_text?.trim() ?? "";
+  if (!text) throw new ProviderCallError("OpenAI returned empty output_text.", "empty_response");
+  return { provider: "openai" as const, model, text };
 }
 
 async function callClaude(prompt: string, signal: AbortSignal) {
   const apiKey = firstEnv("ANTHROPIC_API_KEY", "CLAUDE_API_KEY");
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY/CLAUDE_API_KEY missing");
+  if (!apiKey) throw new ProviderCallError("Missing Claude key.", "missing_key");
   const model = process.env.ANTHROPIC_SPEAKING_MODEL || "claude-3-5-sonnet-latest";
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -429,15 +458,19 @@ async function callClaude(prompt: string, signal: AbortSignal) {
     }),
     signal,
   });
-  if (!res.ok) throw new Error(`anthropic-${res.status}`);
+  if (!res.ok) {
+    const responseSnippet = clip(await res.text().catch(() => ""));
+    throw new ProviderCallError(`Claude HTTP ${res.status}`, "http_error", res.status, responseSnippet);
+  }
   const payload = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
   const text = payload.content?.find((item) => item.type === "text")?.text ?? "";
+  if (!text.trim()) throw new ProviderCallError("Claude returned empty text.", "empty_response");
   return { provider: "anthropic" as const, model, text: text.trim() };
 }
 
 async function callGemini(prompt: string, signal: AbortSignal) {
   const apiKey = firstEnv("GEMINI_API_KEY", "GOOGLE_API_KEY");
-  if (!apiKey) throw new Error("GEMINI_API_KEY/GOOGLE_API_KEY missing");
+  if (!apiKey) throw new ProviderCallError("Missing Gemini key.", "missing_key");
   const model = process.env.GEMINI_SPEAKING_MODEL || "gemini-1.5-pro";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
@@ -449,11 +482,15 @@ async function callGemini(prompt: string, signal: AbortSignal) {
     }),
     signal,
   });
-  if (!res.ok) throw new Error(`gemini-${res.status}`);
+  if (!res.ok) {
+    const responseSnippet = clip(await res.text().catch(() => ""));
+    throw new ProviderCallError(`Gemini HTTP ${res.status}`, "http_error", res.status, responseSnippet);
+  }
   const payload = (await res.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
   const text = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  if (!text.trim()) throw new ProviderCallError("Gemini returned empty text.", "empty_response");
   return { provider: "gemini" as const, model, text: text.trim() };
 }
 
@@ -503,24 +540,109 @@ export async function POST(req: Request) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25000);
   const startedAt = Date.now();
+  const envDiagnostics = {
+    openai: {
+      keyDetected: Boolean(firstEnv("OPENAI_API_KEY", "CHATGPT_API_KEY")),
+      keyName: firstEnvKey("OPENAI_API_KEY", "CHATGPT_API_KEY") || null,
+      model: process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini",
+    },
+    claude: {
+      keyDetected: Boolean(firstEnv("ANTHROPIC_API_KEY", "CLAUDE_API_KEY")),
+      keyName: firstEnvKey("ANTHROPIC_API_KEY", "CLAUDE_API_KEY") || null,
+      model: process.env.ANTHROPIC_SPEAKING_MODEL || "claude-3-5-sonnet-latest",
+    },
+    gemini: {
+      keyDetected: Boolean(firstEnv("GEMINI_API_KEY", "GOOGLE_API_KEY")),
+      keyName: firstEnvKey("GEMINI_API_KEY", "GOOGLE_API_KEY") || null,
+      model: process.env.GEMINI_SPEAKING_MODEL || "gemini-1.5-pro",
+    },
+  };
   const providers: Array<() => Promise<{ provider: "openai" | "anthropic" | "gemini"; model: string; text: string }>> = [
     () => callOpenAI(prompt, controller.signal),
     () => callClaude(prompt, controller.signal),
     () => callGemini(prompt, controller.signal),
   ];
   const failures: string[] = [];
+  const providerDiagnostics: Array<{
+    provider: "openai" | "anthropic" | "gemini";
+    model: string;
+    keyDetected: boolean;
+    keyName: string | null;
+    stage: "call" | "parse" | "normalize";
+    errorCode: string;
+    message: string;
+    status?: number;
+    responseSnippet?: string;
+  }> = [];
+  const providerOrder: Array<"openai" | "anthropic" | "gemini"> = ["openai", "anthropic", "gemini"];
   try {
-    for (const callProvider of providers) {
+    for (const [idx, callProvider] of providers.entries()) {
+      const providerId = providerOrder[idx];
       try {
         const output = await callProvider();
-        const data = parseJsonObject(output.text);
+        let data: Record<string, unknown>;
+        try {
+          data = parseJsonObject(output.text);
+        } catch (err) {
+          const parseMsg = err instanceof Error ? err.message : "parse-failed";
+          failures.push(`${providerId}:parse:${parseMsg}`);
+          providerDiagnostics.push({
+            provider: providerId,
+            model: output.model,
+            keyDetected: envDiagnostics[providerId === "anthropic" ? "claude" : providerId].keyDetected,
+            keyName: envDiagnostics[providerId === "anthropic" ? "claude" : providerId].keyName,
+            stage: "parse",
+            errorCode: "invalid_json",
+            message: parseMsg,
+            responseSnippet: clip(output.text),
+          });
+          continue;
+        }
         const result = normalizeAssessmentResult(body, data);
-        if (!result.overall.roundedBand) throw new Error("invalid-band");
+        if (!result.overall.roundedBand) {
+          failures.push(`${providerId}:normalize:invalid-band`);
+          providerDiagnostics.push({
+            provider: providerId,
+            model: output.model,
+            keyDetected: envDiagnostics[providerId === "anthropic" ? "claude" : providerId].keyDetected,
+            keyName: envDiagnostics[providerId === "anthropic" ? "claude" : providerId].keyName,
+            stage: "normalize",
+            errorCode: "invalid_band",
+            message: "Provider response normalized but roundedBand is 0.",
+          });
+          continue;
+        }
         clearTimeout(timeout);
         await logUsage(true, Date.now() - startedAt, output.provider, output.model);
         return NextResponse.json(result);
       } catch (err) {
-        failures.push(err instanceof Error ? err.message : "unknown");
+        const detail = envDiagnostics[providerId === "anthropic" ? "claude" : providerId];
+        if (err instanceof ProviderCallError) {
+          failures.push(`${providerId}:${err.code}:${err.message}`);
+          providerDiagnostics.push({
+            provider: providerId,
+            model: detail.model,
+            keyDetected: detail.keyDetected,
+            keyName: detail.keyName,
+            stage: "call",
+            errorCode: err.code,
+            message: err.message,
+            status: err.status,
+            responseSnippet: err.responseSnippet,
+          });
+        } else {
+          const msg = err instanceof Error ? err.message : "unknown";
+          failures.push(`${providerId}:unknown:${msg}`);
+          providerDiagnostics.push({
+            provider: providerId,
+            model: detail.model,
+            keyDetected: detail.keyDetected,
+            keyName: detail.keyName,
+            stage: "call",
+            errorCode: "unknown",
+            message: msg,
+          });
+        }
       }
     }
     clearTimeout(timeout);
@@ -529,6 +651,8 @@ export async function POST(req: Request) {
       {
         error: "All assessment providers failed. Check provider API keys/models in Vercel env and redeploy.",
         providerFailures: failures,
+        providerDiagnostics,
+        envDiagnostics,
       },
       { status: 502 },
     );
