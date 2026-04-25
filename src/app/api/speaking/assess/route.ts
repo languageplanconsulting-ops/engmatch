@@ -494,6 +494,25 @@ async function callGemini(prompt: string, signal: AbortSignal) {
   return { provider: "gemini" as const, model, text: text.trim() };
 }
 
+async function withProviderTimeout<T>(
+  providerName: "openai" | "anthropic" | "gemini",
+  fn: (signal: AbortSignal) => Promise<T>,
+  timeoutMs = 20000,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fn(controller.signal);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new ProviderCallError(`${providerName} timed out after ${timeoutMs}ms`, "timeout");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function logUsage(
   success: boolean,
   latencyMs: number,
@@ -537,8 +556,6 @@ export async function POST(req: Request) {
   }
   const prompt = buildAssessmentPrompt(body);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
   const startedAt = Date.now();
   const envDiagnostics = {
     openai: {
@@ -558,9 +575,9 @@ export async function POST(req: Request) {
     },
   };
   const providers: Array<() => Promise<{ provider: "openai" | "anthropic" | "gemini"; model: string; text: string }>> = [
-    () => callOpenAI(prompt, controller.signal),
-    () => callClaude(prompt, controller.signal),
-    () => callGemini(prompt, controller.signal),
+    () => withProviderTimeout("openai", (signal) => callOpenAI(prompt, signal)),
+    () => withProviderTimeout("anthropic", (signal) => callClaude(prompt, signal)),
+    () => withProviderTimeout("gemini", (signal) => callGemini(prompt, signal)),
   ];
   const failures: string[] = [];
   const providerDiagnostics: Array<{
@@ -612,7 +629,6 @@ export async function POST(req: Request) {
           });
           continue;
         }
-        clearTimeout(timeout);
         await logUsage(true, Date.now() - startedAt, output.provider, output.model);
         return NextResponse.json(result);
       } catch (err) {
@@ -645,7 +661,6 @@ export async function POST(req: Request) {
         }
       }
     }
-    clearTimeout(timeout);
     await logUsage(false, Date.now() - startedAt, "openai", process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini", failures.join(";"));
     return NextResponse.json(
       {
@@ -657,7 +672,6 @@ export async function POST(req: Request) {
       { status: 502 },
     );
   } catch {
-    clearTimeout(timeout);
     await logUsage(false, Date.now() - startedAt, "openai", process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini", "network");
     return NextResponse.json({ error: "Assessment request failed." }, { status: 502 });
   }
