@@ -688,6 +688,14 @@ OUTPUT REQUIREMENTS
 - Step-up corrections must target ONLY the missing buckets for the next band.
 - For grammar and vocabulary corrections, return originalText and improvedText.
 - For fluency corrections, return suggestionToAdd instead of originalText/improvedText when the gap is word count or extension.
+- Keep the output compact.
+- Use at most 2 achieved bullets per bucket.
+- Use at most 2 missing bullets per bucket.
+- Return exactly 3 stepUpCorrections.
+- Keep each explanation under 18 words.
+- Keep criteria evidence arrays to max 2 items each.
+- Keep grammarCorrections and vocabularyUpgrades to max 3 items each.
+- sampleImprovedAnswer.english must be 80-120 words maximum.
 
 JSON SHAPE
 {
@@ -731,7 +739,7 @@ async function callOpenAI(prompt: string, signal: AbortSignal) {
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, input: prompt, max_output_tokens: 1800 }),
+    body: JSON.stringify({ model, input: prompt, max_output_tokens: 3200 }),
     signal,
   });
   if (!res.ok) throw new ProviderCallError(`OpenAI HTTP ${res.status}`, "http_error", res.status);
@@ -750,7 +758,7 @@ async function callClaude(prompt: string, signal: AbortSignal) {
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model,
-      max_tokens: 1800,
+      max_tokens: 3200,
       temperature: 0.2,
       system: "Output exactly one valid JSON object only.",
       messages: [{ role: "user", content: prompt }],
@@ -777,7 +785,7 @@ async function callGemini(prompt: string, signal: AbortSignal) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      generationConfig: { temperature: 0.2, maxOutputTokens: 1800, responseMimeType: "application/json" },
+      generationConfig: { temperature: 0.2, maxOutputTokens: 3200, responseMimeType: "application/json" },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     }),
     signal,
