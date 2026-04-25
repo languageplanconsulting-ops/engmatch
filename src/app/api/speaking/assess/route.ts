@@ -91,7 +91,17 @@ function parseJsonObject(text: string) {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) throw new Error("No JSON object in model output");
-  return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+  const raw = text.slice(start, end + 1);
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    // Tolerate common model JSON issues: trailing commas and fenced code wrappers.
+    const cleaned = raw
+      .replace(/```json/gi, "")
+      .replace(/```/g, "")
+      .replace(/,\s*([}\]])/g, "$1");
+    return JSON.parse(cleaned) as Record<string, unknown>;
+  }
 }
 
 function firstEnv(...keys: string[]) {
@@ -474,7 +484,7 @@ async function callClaude(prompt: string, signal: AbortSignal) {
   const models = parseModelCandidates(process.env.ANTHROPIC_SPEAKING_MODEL, [
     "claude-3-5-sonnet-20241022",
     "claude-3-5-sonnet-20240620",
-    "claude-3-7-sonnet-20250219",
+    "claude-3-haiku-20240307",
   ]);
 
   let lastError: ProviderCallError | null = null;
@@ -519,7 +529,8 @@ async function callGemini(prompt: string, signal: AbortSignal) {
     "gemini-1.5-flash",
     "gemini-1.5-flash-002",
     "gemini-1.5-pro-002",
-    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
   ]);
 
   let lastError: ProviderCallError | null = null;
