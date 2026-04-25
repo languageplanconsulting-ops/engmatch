@@ -26,6 +26,23 @@ type WhisperVerboseResponse = {
   }>;
 };
 
+type SpeakingDelegates = {
+  speakingSubmission?: {
+    findMany: (args: { orderBy: { createdAt: "desc" }; take: number }) => Promise<unknown[]>;
+    create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
+  };
+  speakingPack?: {
+    upsert: (args: { where: { packId: string }; update: Record<string, unknown>; create: Record<string, unknown> }) => Promise<unknown>;
+  };
+  speakingAttempt?: {
+    create: (args: { data: Record<string, unknown> }) => Promise<{ id: string }>;
+  };
+};
+
+function getSpeakingDelegates() {
+  return prisma as unknown as SpeakingDelegates;
+}
+
 async function buildWhisperAudioMetadata(audioUrl: string, prompt: string, transcript: string) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
@@ -90,7 +107,11 @@ async function buildWhisperAudioMetadata(audioUrl: string, prompt: string, trans
 }
 
 export async function GET() {
-  const items = await prisma.speakingSubmission.findMany({
+  const delegates = getSpeakingDelegates();
+  if (!delegates.speakingSubmission) {
+    return NextResponse.json({ error: "Speaking submission model is unavailable in Prisma client." }, { status: 503 });
+  }
+  const items = await delegates.speakingSubmission.findMany({
     orderBy: { createdAt: "desc" },
     take: 30,
   });
@@ -129,14 +150,22 @@ export async function POST(req: Request) {
   });
   const assessRes = await assessSpeaking(assessReq);
   const aiReport = (await assessRes.json()) as Prisma.InputJsonValue;
-  const overallBand =
-    typeof aiReport === "object" && aiReport !== null && "overall" in aiReport
-      ? typeof aiReport.overall === "number"
-        ? aiReport.overall
-        : Number(aiReport.overall ?? 0)
-      : 0;
+  const overallBand = (() => {
+    if (!aiReport || typeof aiReport !== "object") return 0;
+    const overall = (aiReport as Record<string, unknown>).overall;
+    if (typeof overall === "number") return Number.isFinite(overall) ? overall : 0;
+    if (overall && typeof overall === "object") {
+      const rounded = Number((overall as Record<string, unknown>).roundedBand ?? 0);
+      return Number.isFinite(rounded) ? rounded : 0;
+    }
+    return 0;
+  })();
+  const delegates = getSpeakingDelegates();
+  if (!delegates.speakingPack || !delegates.speakingAttempt || !delegates.speakingSubmission) {
+    return NextResponse.json({ error: "Speaking models are unavailable in Prisma client." }, { status: 503 });
+  }
   const effectivePackId = body.packId ?? "manual-report";
-  await prisma.speakingPack.upsert({
+  await delegates.speakingPack.upsert({
     where: { packId: effectivePackId },
     update: {},
     create: {
@@ -156,7 +185,7 @@ export async function POST(req: Request) {
     },
   });
 
-  const attempt = await prisma.speakingAttempt.create({
+  const attempt = await delegates.speakingAttempt.create({
     data: {
       packId: effectivePackId,
       mode: body.mode ?? "part-3",
@@ -165,7 +194,7 @@ export async function POST(req: Request) {
       bestBand: Number.isFinite(overallBand) ? overallBand : null,
     },
   });
-  const created = await prisma.speakingSubmission.create({
+  const created = await delegates.speakingSubmission.create({
     data: {
       attemptId: attempt.id,
       questionId: body.questionId ?? "manual-question",
