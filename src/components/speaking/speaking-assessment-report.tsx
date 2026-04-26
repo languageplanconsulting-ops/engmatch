@@ -17,7 +17,19 @@ function SectionTitle({ thai, english }: { thai: string; english: string }) {
   );
 }
 
-function BucketColumn({
+function QuoteChip({ quote, tone = "slate" }: { quote: string; tone?: "emerald" | "amber" | "slate" | "blue" }) {
+  const toneClass =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-100 text-emerald-900"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-100 text-amber-900"
+        : tone === "blue"
+          ? "border-blue-200 bg-blue-100 text-blue-900"
+          : "border-slate-200 bg-slate-100 text-slate-800";
+  return <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${toneClass}`}>{quote}</span>;
+}
+
+function BucketRow({
   title,
   subtitle,
   checklist,
@@ -36,36 +48,43 @@ function BucketColumn({
     const isAchieved = state === "achieved";
     return (
       <li
-        className={`rounded-2xl border p-3 ${
+        className={`rounded-3xl border p-4 ${
           isAchieved ? "border-emerald-200 bg-emerald-50/80" : "border-amber-200 bg-amber-50/80"
         }`}
       >
-        <p className={`text-sm font-semibold ${isAchieved ? "checklist-done" : "checklist-miss"}`}>
+        <p className={`text-base font-semibold leading-7 ${isAchieved ? "checklist-done" : "checklist-miss"}`}>
           {`${isAchieved ? "✓" : "🔒"} ${item.thai}`}
         </p>
-        <p className={`mt-1 text-xs ${isAchieved ? "text-emerald-700" : "text-amber-700"}`}>{item.english}</p>
+        <p className={`mt-1 text-sm leading-6 ${isAchieved ? "text-emerald-700" : "text-amber-700"}`}>{item.english}</p>
 
         {(item.evidenceThai || item.evidenceEnglish) && (
-          <div className="mt-3 rounded-xl bg-white/80 p-3">
-            <p className="text-xs font-semibold text-slate-900">หลักฐาน / Evidence</p>
-            {item.evidenceThai && <p className="mt-1 text-xs text-slate-700">{item.evidenceThai}</p>}
-            {item.evidenceEnglish && <p className="mt-1 text-xs text-slate-500">{item.evidenceEnglish}</p>}
+          <div className="mt-4 rounded-2xl bg-white/90 p-4">
+            <p className="text-sm font-semibold text-slate-900">หลักฐาน / Evidence</p>
+            {item.evidenceThai && <p className="mt-2 text-sm leading-6 text-slate-700">{item.evidenceThai}</p>}
+            {item.evidenceEnglish && <p className="mt-1 text-sm leading-6 text-slate-500">{item.evidenceEnglish}</p>}
+            {item.evidenceQuotes && item.evidenceQuotes.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {item.evidenceQuotes.map((quote, idx) => (
+                  <QuoteChip key={`${quote}-${idx}`} quote={quote} tone={isAchieved ? "emerald" : "amber"} />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {!isAchieved && (
-          <div className="mt-3 space-y-2">
-            <div className="rounded-xl bg-white/80 p-3">
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            <div className="rounded-2xl bg-white/90 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Vocabulary</p>
-              <p className="mt-1 text-xs font-medium text-slate-800">{item.suggestedVocabulary ?? "-"}</p>
+              <p className="mt-2 text-sm font-medium leading-6 text-slate-800">{item.suggestedVocabulary ?? "-"}</p>
             </div>
-            <div className="rounded-xl bg-white/80 p-3">
+            <div className="rounded-2xl bg-white/90 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Fix</p>
-              <p className="mt-1 text-xs font-medium text-slate-800">{item.suggestedFix ?? "-"}</p>
+              <p className="mt-2 text-sm font-medium leading-6 text-slate-800">{item.suggestedFix ?? "-"}</p>
             </div>
-            <div className="rounded-xl bg-white/80 p-3">
+            <div className="rounded-2xl bg-white/90 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Sentence</p>
-              <p className="mt-1 text-xs font-medium italic text-slate-800">{item.suggestedSentence ?? "-"}</p>
+              <p className="mt-2 text-sm font-medium italic leading-6 text-slate-800">{item.suggestedSentence ?? "-"}</p>
             </div>
           </div>
         )}
@@ -74,21 +93,21 @@ function BucketColumn({
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-lg font-semibold text-slate-900">{subtitle}</p>
-          <p className="text-sm text-slate-500">{title}</p>
+          <p className="text-3xl font-semibold text-slate-900">{subtitle}</p>
+          <p className="mt-1 text-lg text-slate-500">{title}</p>
         </div>
-        <div className="rounded-full bg-[#004aad] px-3 py-1 text-sm font-semibold text-white">
+        <div className="rounded-full bg-[#004aad] px-5 py-2 text-base font-semibold text-white">
           Band {checklist.currentBand}
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div>
-          <p className="text-sm font-semibold text-slate-900">สิ่งที่คุณทำได้</p>
-          <p className="mb-2 text-xs text-slate-500">Achieved</p>
+          <p className="text-base font-semibold text-slate-900">สิ่งที่คุณทำได้</p>
+          <p className="mb-3 text-sm text-slate-500">Achieved</p>
           <ul className="space-y-2">
             {checklist.achieved.map((item, idx) => (
               <ChecklistItem key={idx} item={item} state="achieved" />
@@ -97,8 +116,8 @@ function BucketColumn({
         </div>
 
         <div>
-          <p className="text-sm font-semibold text-slate-900">เป้าหมายต่อไป</p>
-          <p className="mb-2 text-xs text-slate-500">{`Target +1 Band (${checklist.nextTargetBand})`}</p>
+          <p className="text-base font-semibold text-slate-900">เป้าหมายต่อไป</p>
+          <p className="mb-3 text-sm text-slate-500">{`Target +1 Band (${checklist.nextTargetBand})`}</p>
           <ul className="space-y-2">
             {checklist.missingForNextBand.map((item, idx) => (
               <ChecklistItem key={idx} item={item} state="target" />
@@ -314,39 +333,29 @@ export function SpeakingAssessmentReport({
       </div>
 
       <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
-        <SectionTitle thai="AI Pre-processing" english="Raw ASR transcript vs. punctuated transcript" />
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="mb-3 inline-flex rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
-              Raw ASR
-            </div>
-            <p className="text-lg font-semibold text-slate-900">ข้อความดิบจากระบบถอดเสียง</p>
-            <p className="mt-1 text-sm text-slate-500">Raw ASR transcript</p>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{reportCard.preprocess.rawTranscript}</p>
+        <SectionTitle thai="AI Pre-processing" english="Punctuated transcript used for evaluation" />
+        <div className="rounded-3xl border border-blue-200 bg-blue-50 p-5">
+          <div className="mb-3 inline-flex rounded-full bg-[#004aad] px-3 py-1 text-xs font-semibold text-white">
+            Punctuated
           </div>
-          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-            <div className="mb-3 inline-flex rounded-full bg-[#004aad] px-3 py-1 text-xs font-semibold text-white">
-              Punctuated
-            </div>
-            <p className="text-lg font-semibold text-slate-900">เวอร์ชันที่เติมวรรคตอนแล้ว</p>
-            <p className="mt-1 text-sm text-slate-500">Punctuated transcript</p>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{reportCard.preprocess.punctuatedTranscript}</p>
-          </div>
+          <p className="text-lg font-semibold text-slate-900">เวอร์ชันที่เติมวรรคตอนแล้ว</p>
+          <p className="mt-1 text-sm text-slate-500">Punctuated transcript</p>
+          <p className="mt-4 whitespace-pre-wrap text-base leading-8 text-slate-700">{reportCard.preprocess.punctuatedTranscript}</p>
         </div>
       </div>
 
       <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
         <SectionTitle thai="Bucket List Checklists" english="Grammar, vocabulary, and fluency buckets" />
-        <div className="grid gap-4 lg:grid-cols-3">
-          <BucketColumn title="Grammar" subtitle="ไวยากรณ์" checklist={reportCard.buckets.grammar} />
-          <BucketColumn title="Vocabulary" subtitle="คำศัพท์" checklist={reportCard.buckets.vocabulary} />
-          <BucketColumn title="Fluency" subtitle="ความคล่องแคล่ว" checklist={reportCard.buckets.fluency} />
+        <div className="space-y-5">
+          <BucketRow title="Grammar" subtitle="ไวยากรณ์" checklist={reportCard.buckets.grammar} />
+          <BucketRow title="Vocabulary" subtitle="คำศัพท์" checklist={reportCard.buckets.vocabulary} />
+          <BucketRow title="Fluency" subtitle="ความคล่องแคล่ว" checklist={reportCard.buckets.fluency} />
         </div>
       </div>
 
       <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
         <SectionTitle thai="Pronunciation Logic" english="Kept with Whisper AI confidence scoring" />
-        <div className="grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
+        <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="rounded-[24px] border border-blue-100 bg-[linear-gradient(180deg,#eff6ff,#ffffff)] p-5">
             <p className="text-base font-semibold text-slate-900">คะแนนการออกเสียง</p>
             <p className="mt-1 text-sm text-slate-500">Pronunciation score</p>
@@ -360,6 +369,16 @@ export function SpeakingAssessmentReport({
                 <li key={idx}>{item}</li>
               ))}
             </ul>
+            {result.criteria.pronunciation.mainIssues.length > 0 && (
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-slate-900">Words below 90% confidence</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {result.criteria.pronunciation.mainIssues.map((item, idx) => (
+                    <QuoteChip key={`${item}-${idx}`} quote={item} tone="blue" />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

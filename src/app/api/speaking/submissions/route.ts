@@ -16,6 +16,13 @@ type WhisperVerboseResponse = {
   text?: string;
   language?: string;
   duration?: number;
+  words?: Array<{
+    word?: string;
+    probability?: number;
+    confidence?: number;
+    start?: number;
+    end?: number;
+  }>;
   segments?: Array<{
     id?: number;
     start?: number;
@@ -23,6 +30,13 @@ type WhisperVerboseResponse = {
     avg_logprob?: number;
     no_speech_prob?: number;
     compression_ratio?: number;
+    words?: Array<{
+      word?: string;
+      probability?: number;
+      confidence?: number;
+      start?: number;
+      end?: number;
+    }>;
   }>;
 };
 
@@ -65,6 +79,8 @@ async function buildWhisperAudioMetadata(audioUrl: string, prompt: string, trans
     form.append("file", file);
     form.append("model", process.env.OPENAI_WHISPER_MODEL || "whisper-1");
     form.append("response_format", "verbose_json");
+    form.append("timestamp_granularities[]", "word");
+    form.append("timestamp_granularities[]", "segment");
     form.append("prompt", prompt);
     form.append("language", "en");
 
@@ -89,6 +105,26 @@ async function buildWhisperAudioMetadata(audioUrl: string, prompt: string, trans
     const transcriptWords = transcript.trim().split(/\s+/).filter(Boolean).length;
     const wordsPerMinute =
       durationSec > 0 ? Math.round((transcriptWords / durationSec) * 60) : null;
+    const wordRows = [
+      ...(Array.isArray(whisper.words) ? whisper.words : []),
+      ...((whisper.segments ?? []).flatMap((segment) => (Array.isArray(segment.words) ? segment.words : []))),
+    ];
+    const lowConfidenceWords = wordRows
+      .map((row) => {
+        const word = typeof row.word === "string" ? row.word.trim() : "";
+        const rawConfidence =
+          typeof row.probability === "number"
+            ? row.probability
+            : typeof row.confidence === "number"
+              ? row.confidence
+              : NaN;
+        if (!word || !Number.isFinite(rawConfidence)) return null;
+        const confidencePct = rawConfidence <= 1 ? Math.round(rawConfidence * 100) : Math.round(rawConfidence);
+        return { word, confidencePct };
+      })
+      .filter((row): row is { word: string; confidencePct: number } => Boolean(row))
+      .filter((row) => row.confidencePct < 90)
+      .slice(0, 12);
 
     return {
       source: "openai-whisper",
@@ -100,6 +136,7 @@ async function buildWhisperAudioMetadata(audioUrl: string, prompt: string, trans
       avgNoSpeechProb: avgNoSpeechProb !== null ? Number(avgNoSpeechProb.toFixed(3)) : null,
       wordsPerMinute,
       whisperTranscriptPreview: (whisper.text ?? "").slice(0, 240),
+      lowConfidenceWords,
     };
   } catch {
     return null;

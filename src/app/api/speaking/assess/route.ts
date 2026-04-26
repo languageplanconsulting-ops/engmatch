@@ -50,6 +50,7 @@ export type BilingualBullet = {
   english: string;
   evidenceThai?: string;
   evidenceEnglish?: string;
+  evidenceQuotes?: string[];
   suggestedVocabulary?: string;
   suggestedFix?: string;
   suggestedSentence?: string;
@@ -148,6 +149,7 @@ export type AssessmentResult = {
 };
 
 type TranscriptSignals = {
+  transcript: string;
   words: number;
   lower: string;
   references: number;
@@ -226,6 +228,10 @@ type WhisperAudioMetadata = {
   avgNoSpeechProb?: number | null;
   wordsPerMinute?: number | null;
   whisperTranscriptPreview?: string;
+  lowConfidenceWords?: Array<{
+    word: string;
+    confidencePct: number;
+  }>;
 };
 
 function parseWhisperAudioMetadata(input: unknown): WhisperAudioMetadata | null {
@@ -241,6 +247,16 @@ function parseWhisperAudioMetadata(input: unknown): WhisperAudioMetadata | null 
     avgNoSpeechProb: typeof n.avgNoSpeechProb === "number" ? n.avgNoSpeechProb : null,
     wordsPerMinute: typeof n.wordsPerMinute === "number" ? n.wordsPerMinute : null,
     whisperTranscriptPreview: typeof n.whisperTranscriptPreview === "string" ? n.whisperTranscriptPreview : "",
+    lowConfidenceWords: Array.isArray(n.lowConfidenceWords)
+      ? (n.lowConfidenceWords as Array<Record<string, unknown>>)
+          .map((row) => {
+            const word = typeof row.word === "string" ? row.word.trim() : "";
+            const confidencePct = Number(row.confidencePct ?? NaN);
+            if (!word || !Number.isFinite(confidencePct)) return null;
+            return { word, confidencePct };
+          })
+          .filter((row): row is { word: string; confidencePct: number } => Boolean(row))
+      : undefined,
   };
 }
 
@@ -324,6 +340,7 @@ function normalizeBilingualBullets(input: unknown) {
         english,
         evidenceThai: typeof row.evidenceThai === "string" ? row.evidenceThai : undefined,
         evidenceEnglish: typeof row.evidenceEnglish === "string" ? row.evidenceEnglish : undefined,
+        evidenceQuotes: Array.isArray(row.evidenceQuotes) ? row.evidenceQuotes.map(String).filter(Boolean) : undefined,
         suggestedVocabulary: typeof row.suggestedVocabulary === "string" ? row.suggestedVocabulary : undefined,
         suggestedFix: typeof row.suggestedFix === "string" ? row.suggestedFix : undefined,
         suggestedSentence: typeof row.suggestedSentence === "string" ? row.suggestedSentence : undefined,
@@ -526,6 +543,7 @@ function normalizeCriterion(input: unknown): CriterionDetail {
 
 function buildPronunciationCriterion(confidencePct: number, audioMetadata: WhisperAudioMetadata | null): CriterionDetail {
   const band = pronunciationBandFromConfidence(confidencePct);
+  const lowConfidenceWords = (audioMetadata?.lowConfidenceWords ?? []).filter((row) => row.confidencePct < 90).slice(0, 8);
   const evidence = [
     `Estimated pronunciation confidence: ${confidencePct}%`,
     audioMetadata?.avgLogprob !== null && audioMetadata?.avgLogprob !== undefined
@@ -537,6 +555,9 @@ function buildPronunciationCriterion(confidencePct: number, audioMetadata: Whisp
   }
   if (typeof audioMetadata?.wordsPerMinute === "number") {
     evidence.push(`Estimated speaking rate: ${audioMetadata.wordsPerMinute} words/minute`);
+  }
+  if (lowConfidenceWords.length > 0) {
+    evidence.push(`Words below 90% confidence: ${lowConfidenceWords.map((row) => `${row.word} (${row.confidencePct}%)`).join(", ")}`);
   }
   return {
     band,
@@ -550,9 +571,11 @@ function buildPronunciationCriterion(confidencePct: number, audioMetadata: Whisp
         : "ความชัดของการออกเสียงยังลดความสบายในการฟัง ตามตรรกะคะแนนความมั่นใจของ Whisper",
     evidence,
     mainIssues:
-      band >= 7
-        ? ["Keep word stress and pacing consistent."]
-        : ["Some sounds or pacing likely reduce recognizability."],
+      lowConfidenceWords.length > 0
+        ? lowConfidenceWords.map((row) => `${row.word} (${row.confidencePct}%)`)
+        : band >= 7
+          ? ["Keep word stress and pacing consistent."]
+          : ["Some sounds or pacing likely reduce recognizability."],
     howToImprove: {
       english: [
         "Shadow one 30-second section and exaggerate stressed words.",
@@ -672,11 +695,46 @@ function countSelfCorrections(text: string) {
   return patterns.reduce((sum, pattern) => sum + ((text.match(pattern) ?? []).length), 0);
 }
 
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function quoteText(text: string) {
+  return `"${text.trim()}"`;
+}
+
+function findQuotedMatches(transcript: string, candidates: string[], limit = 4) {
+  const results: string[] = [];
+  for (const candidate of candidates) {
+    const normalized = candidate.trim();
+    if (!normalized) continue;
+    const regex = new RegExp(escapeRegExp(normalized), "i");
+    const match = transcript.match(regex);
+    if (!match?.[0]) continue;
+    const quoted = quoteText(match[0]);
+    if (!results.includes(quoted)) results.push(quoted);
+    if (results.length >= limit) break;
+  }
+  return results;
+}
+
+function collectReferenceQuotes(transcript: string, limit = 4) {
+  const matches = transcript.match(/\b(this|that|those|these)\b/gi) ?? [];
+  return matches.slice(0, limit).map((word) => quoteText(word));
+}
+
+function getTranscriptSnippet(transcript: string, limit = 120) {
+  const normalized = transcript.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length <= limit ? normalized : `${normalized.slice(0, limit).trim()}...`;
+}
+
 function buildChecklistItem(
   thai: string,
   english: string,
   evidenceThai: string,
   evidenceEnglish: string,
+  evidenceQuotes?: string[],
   suggestedVocabulary?: string,
   suggestedFix?: string,
   suggestedSentence?: string,
@@ -686,6 +744,7 @@ function buildChecklistItem(
     english,
     evidenceThai,
     evidenceEnglish,
+    evidenceQuotes,
     suggestedVocabulary,
     suggestedFix,
     suggestedSentence,
@@ -706,6 +765,7 @@ function buildBucketChecklist(
 }
 
 function buildGrammarChecklistDetailed(
+  transcript: string,
   grammarBand: number,
   grammarCorrections: GrammarCorrection[],
   hasPast: boolean,
@@ -715,20 +775,36 @@ function buildGrammarChecklistDetailed(
 ): BucketChecklist {
   const achieved: BilingualBullet[] = [];
   const missing: BilingualBullet[] = [];
+  const correctionQuotes = grammarCorrections.map((item) => quoteText(item.original));
+  const linkerQuotes = findQuotedMatches(transcript, ["because", "if", "when", "although", "though", "since", "while", "unless"]);
+  const pastQuotes = findQuotedMatches(transcript, ["was", "were", "did", "had", "started", "graduated", "realized", "changed", "stopped", "felt"]);
+  const perfectQuotes = findQuotedMatches(transcript, ["has", "have", "had"]);
+  const conditionalQuotes = findQuotedMatches(transcript, ["if", "would", "could", "might", "will"]);
+  const snippetQuote = quoteText(getTranscriptSnippet(transcript));
 
   if (grammarBand >= 7) {
     achieved.push(
       buildChecklistItem(
         "ใช้ simple tenses ได้ค่อนข้างถูกต้อง",
         "Uses simple tenses correctly enough for this band.",
-        `หลักฐาน: พบ grammar issue เด่น ${grammarCorrections.length} จุด`,
-        `Evidence: ${grammarCorrections.length} major grammar issues detected.`,
+        grammarCorrections.length
+          ? `หลักฐาน: ยังสื่อสารได้ แม้มีจุดที่ต้องแก้อย่าง ${correctionQuotes.join(", ")}`
+          : `หลักฐาน: ไม่พบ grammar error เด่นในช่วงที่ตรวจ`,
+        grammarCorrections.length
+          ? `Evidence: meaning is still clear despite issues like ${correctionQuotes.join(", ")}.`
+          : "Evidence: no major grammar error was detected in the checked response.",
+        grammarCorrections.length ? correctionQuotes : [snippetQuote],
       ),
       buildChecklistItem(
         "ใช้ subordinating conjunctions เพื่อเชื่อมความคิด",
         "Uses subordinating conjunctions to connect ideas.",
-        `หลักฐาน: พบ because/if/when/although รวม ${subordinators} จุด`,
-        `Evidence: ${subordinators} subordinating linkers found.`,
+        linkerQuotes.length
+          ? `หลักฐาน: ใช้คำเชื่อมจริง เช่น ${linkerQuotes.join(", ")}`
+          : `หลักฐาน: ตรวจพบคำเชื่อมย่อย ${subordinators} จุด`,
+        linkerQuotes.length
+          ? `Evidence: the transcript uses real linkers such as ${linkerQuotes.join(", ")}.`
+          : `Evidence: ${subordinators} subordinating linkers were detected.`,
+        linkerQuotes.length ? linkerQuotes : [snippetQuote],
       ),
     );
   } else {
@@ -736,8 +812,13 @@ function buildGrammarChecklistDetailed(
       buildChecklistItem(
         "ยังสื่อสารได้แม้มี tense error หลายจุด",
         "Meaning is still understandable despite tense errors.",
-        `หลักฐาน: ยังจับใจความหลักได้ครบ`,
-        "Evidence: the main message remains understandable.",
+        correctionQuotes.length
+          ? `หลักฐาน: ยังจับใจความได้ แม้มีจุดอย่าง ${correctionQuotes.join(", ")}`
+          : `หลักฐาน: ยังจับใจความหลักได้จาก ${snippetQuote}`,
+        correctionQuotes.length
+          ? `Evidence: the message still comes through even with issues like ${correctionQuotes.join(", ")}.`
+          : `Evidence: the main message is still understandable from ${snippetQuote}.`,
+        correctionQuotes.length ? correctionQuotes : [snippetQuote],
       ),
     );
   }
@@ -747,8 +828,9 @@ function buildGrammarChecklistDetailed(
       buildChecklistItem(
         "มีการใช้ past/perfect forms ค่อนข้างมั่นคง",
         "Shows reasonably strong past/perfect tense control.",
-        `หลักฐาน: past=${hasPast ? "yes" : "no"}, perfect=${hasPerfect ? "yes" : "no"}`,
-        `Evidence: past=${hasPast ? "yes" : "no"}, perfect=${hasPerfect ? "yes" : "no"}.`,
+        `หลักฐาน: past จริง ${pastQuotes.join(", ") || "ยังไม่ชัด"} และ perfect ${perfectQuotes.join(", ") || "ยังไม่ชัด"}`,
+        `Evidence: past forms include ${pastQuotes.join(", ") || "none clear yet"}; perfect forms include ${perfectQuotes.join(", ") || "none clear yet"}.`,
+        [...pastQuotes, ...perfectQuotes].slice(0, 4),
       ),
     );
   } else {
@@ -756,8 +838,9 @@ function buildGrammarChecklistDetailed(
       buildChecklistItem(
         "ต้องใช้ past และ perfect forms ให้แม่นขึ้นทั้งคำตอบ",
         "Need stronger control of past and perfect forms across the answer.",
-        `หลักฐานตอนนี้: past=${hasPast ? "yes" : "limited"}, perfect=${hasPerfect ? "yes" : "no"}`,
-        `Current evidence: past=${hasPast ? "yes" : "limited"}, perfect=${hasPerfect ? "yes" : "no"}.`,
+        `หลักฐานตอนนี้: past ที่เห็นคือ ${pastQuotes.join(", ") || "ยังไม่ชัด"} และ perfect ${perfectQuotes.join(", ") || "ยังไม่ชัด"}`,
+        `Current evidence: the transcript shows ${pastQuotes.join(", ") || "limited past marking"} and ${perfectQuotes.join(", ") || "no clear perfect form yet"}.`,
+        [...pastQuotes, ...perfectQuotes].slice(0, 4),
         "perfect tenses, although, since",
         "Turn short past statements into fuller past/perfect sentences.",
         "Although I had just graduated, I still felt uncertain about my future.",
@@ -770,8 +853,9 @@ function buildGrammarChecklistDetailed(
       buildChecklistItem(
         "มี conditional และโครงสร้างซับซ้อนโดยแทบไม่พลาด",
         "Uses conditionals and complex structures with almost no errors.",
-        `หลักฐาน: conditional=${hasConditional ? "yes" : "no"}`,
-        `Evidence: conditional=${hasConditional ? "yes" : "no"}.`,
+        `หลักฐาน: conditional จริง เช่น ${conditionalQuotes.join(", ") || "ยังไม่ชัด"}`,
+        `Evidence: conditional language appears in ${conditionalQuotes.join(", ") || "no clear form yet"}.`,
+        conditionalQuotes.length ? conditionalQuotes : [snippetQuote],
       ),
     );
   } else {
@@ -779,8 +863,9 @@ function buildGrammarChecklistDetailed(
       buildChecklistItem(
         "ต้องเพิ่ม conditional หรือ complex clause ที่แม่นยำมากขึ้น",
         "Need more accurate conditional or complex-clause control.",
-        `หลักฐานตอนนี้: conditional=${hasConditional ? "yes" : "no"}`,
-        `Current evidence: conditional=${hasConditional ? "yes" : "no"}.`,
+        `หลักฐานตอนนี้: conditional ที่เห็นคือ ${conditionalQuotes.join(", ") || "ยังไม่พบชัดเจน"}`,
+        `Current evidence: conditional wording is ${conditionalQuotes.join(", ") || "not clearly present yet"}.`,
+        conditionalQuotes.length ? conditionalQuotes : [snippetQuote],
         "if I had, if I were, would have",
         "Add one accurate conditional when explaining consequences.",
         "If I had stayed in that environment, I would have lost more confidence.",
@@ -797,20 +882,30 @@ function buildGrammarChecklistDetailed(
 }
 
 function buildVocabularyChecklistDetailed(
+  transcript: string,
   vocabularyBand: number,
   collocations: number,
   advancedCollocations: number,
   awkwardVocabularyCount: number,
+  vocabularyUpgrades: VocabularyUpgrade[],
 ): BucketChecklist {
   const achieved: BilingualBullet[] = [];
   const missing: BilingualBullet[] = [];
+  const collocationQuotes = findQuotedMatches(transcript, [...B1_COLLOCATIONS, ...C1_C2_COLLOCATIONS], 5);
+  const awkwardQuotes = vocabularyUpgrades.map((item) => quoteText(item.original));
+  const snippetQuote = quoteText(getTranscriptSnippet(transcript));
 
   achieved.push(
     buildChecklistItem(
       "ใช้คำศัพท์ตรงประเด็นและยังสื่อสารความหมายได้ชัด",
       "Uses topic-relevant vocabulary with clear overall meaning.",
-      `หลักฐาน: collocation ใช้ได้ ${collocations} จุด`,
-      `Evidence: ${collocations} usable collocations detected.`,
+      collocationQuotes.length
+        ? `หลักฐาน: มีคำหรือวลีจริงในคำตอบ เช่น ${collocationQuotes.join(", ")}`
+        : `หลักฐาน: แม้ยังไม่เด่นมาก แต่สื่อประเด็นได้จาก ${snippetQuote}`,
+      collocationQuotes.length
+        ? `Evidence: the response uses phrases such as ${collocationQuotes.join(", ")}.`
+        : `Evidence: meaning stays clear even without many standout collocations, as in ${snippetQuote}.`,
+      collocationQuotes.length ? collocationQuotes : [snippetQuote],
     ),
   );
 
@@ -819,8 +914,9 @@ function buildVocabularyChecklistDetailed(
       buildChecklistItem(
         "มี collocations หลายจุดพอสำหรับ band นี้",
         "Shows enough collocations for this band.",
-        `หลักฐาน: collocation ระดับใช้ได้ ${collocations} จุด`,
-        `Evidence: ${collocations} workable collocations found.`,
+        `หลักฐาน: collocation ที่พบจริงคือ ${collocationQuotes.join(", ") || "ยังไม่ชัด"}`,
+        `Evidence: workable collocations include ${collocationQuotes.join(", ") || "none clearly detected yet"}.`,
+        collocationQuotes.length ? collocationQuotes : [snippetQuote],
       ),
     );
   } else {
@@ -828,8 +924,9 @@ function buildVocabularyChecklistDetailed(
       buildChecklistItem(
         "ต้องเพิ่ม collocation ให้ชัดขึ้นอย่างน้อย 2-5 จุด",
         "Need clearer collocations, especially 2-5 strong ones.",
-        `หลักฐานตอนนี้: collocation ${collocations} จุด`,
-        `Current evidence: ${collocations} collocations found.`,
+        `หลักฐานตอนนี้: ใช้คำแบบตรง ๆ เช่น ${awkwardQuotes.join(", ") || snippetQuote}`,
+        `Current evidence: the response relies on plainer wording such as ${awkwardQuotes.join(", ") || snippetQuote}.`,
+        awkwardQuotes.length ? awkwardQuotes : [snippetQuote],
         "piece of advice, pivotal moment, toxic environment",
         "Replace plain phrases with tighter collocations in key moments.",
         "It was a pivotal moment that completely changed my outlook.",
@@ -842,8 +939,9 @@ function buildVocabularyChecklistDetailed(
       buildChecklistItem(
         "มีคำ/วลีระดับสูงโดยไม่ทำให้ความหมายสะดุดมาก",
         "Uses some higher-level phrasing without seriously hurting meaning.",
-        `หลักฐาน: advanced collocation ${advancedCollocations} จุด`,
-        `Evidence: ${advancedCollocations} advanced collocations found.`,
+        `หลักฐาน: วลีระดับสูงที่พบคือ ${collocationQuotes.join(", ") || "ยังไม่ชัด"}`,
+        `Evidence: higher-level phrasing includes ${collocationQuotes.join(", ") || "no clear advanced phrase yet"}.`,
+        collocationQuotes.length ? collocationQuotes : [snippetQuote],
       ),
     );
   } else {
@@ -851,8 +949,9 @@ function buildVocabularyChecklistDetailed(
       buildChecklistItem(
         "ต้องเพิ่มวลีระดับสูงและลดความไม่เป็นธรรมชาติ",
         "Need more higher-level phrases and less awkward wording.",
-        `หลักฐานตอนนี้: advanced collocation ${advancedCollocations}, awkward ${awkwardVocabularyCount}`,
-        `Current evidence: advanced=${advancedCollocations}, awkward=${awkwardVocabularyCount}.`,
+        `หลักฐานตอนนี้: คำที่ยังแบนหรือไม่ธรรมชาติ เช่น ${awkwardQuotes.join(", ") || snippetQuote}`,
+        `Current evidence: flatter or awkward wording includes ${awkwardQuotes.join(", ") || snippetQuote}.`,
+        awkwardQuotes.length ? awkwardQuotes : [snippetQuote],
         "deeply discouraged, reshape my outlook, supported my growth",
         "Upgrade emotional and reflective phrases to more precise wording.",
         "That song helped me reshape my outlook during a difficult period.",
@@ -865,8 +964,9 @@ function buildVocabularyChecklistDetailed(
       buildChecklistItem(
         "ต้องใช้ collocation ระดับสูงให้ต่อเนื่องขึ้นทั้งคำตอบ",
         "Need more sustained higher-level collocations throughout the answer.",
-        `หลักฐานตอนนี้: C1-C2 style ยังไม่ต่อเนื่อง`,
-        "Current evidence: higher-level phrasing is not sustained yet.",
+        `หลักฐานตอนนี้: วลีเด่นยังมีไม่ต่อเนื่อง เช่น ${collocationQuotes.join(", ") || snippetQuote}`,
+        `Current evidence: stronger phrasing is not sustained yet beyond ${collocationQuotes.join(", ") || snippetQuote}.`,
+        collocationQuotes.length ? collocationQuotes : [snippetQuote],
         "broaden my perspective, regain my confidence, emotionally significant",
         "Add one stronger phrase in the opening and one in the conclusion.",
         "It remains emotionally significant because it helped me regain my confidence.",
@@ -883,6 +983,7 @@ function buildVocabularyChecklistDetailed(
 }
 
 function buildFluencyChecklistDetailed(
+  transcript: string,
   fluencyBand: number,
   words: number,
   references: number,
@@ -890,14 +991,18 @@ function buildFluencyChecklistDetailed(
 ): BucketChecklist {
   const achieved: BilingualBullet[] = [];
   const missing: BilingualBullet[] = [];
+  const referenceQuotes = collectReferenceQuotes(transcript);
+  const selfCorrectionQuotes = findQuotedMatches(transcript, ["I mean", "you know"], 4);
+  const snippetQuote = quoteText(getTranscriptSnippet(transcript));
 
   if (fluencyBand >= 7) {
     achieved.push(
       buildChecklistItem(
         "พูดได้เกินประมาณ 250 คำ",
         "Produces more than about 250 words.",
-        `หลักฐาน: ตอนนี้ ${words} คำ`,
-        `Evidence: current length is ${words} words.`,
+        `หลักฐาน: คำตอบนี้ยาว ${words} คำ และมีช่วงต่อเนื่องอย่าง ${snippetQuote}`,
+        `Evidence: the response reaches ${words} words and sustains ideas in lines like ${snippetQuote}.`,
+        [snippetQuote],
       ),
     );
   } else if (fluencyBand >= 6) {
@@ -905,8 +1010,9 @@ function buildFluencyChecklistDetailed(
       buildChecklistItem(
         "พูดได้ในช่วงประมาณ 200-250 คำ",
         "Produces roughly 200-250 words.",
-        `หลักฐาน: ตอนนี้ ${words} คำ`,
-        `Evidence: current length is ${words} words.`,
+        `หลักฐาน: คำตอบนี้ยาว ${words} คำ และยังเล่าเรื่องต่อได้ เช่น ${snippetQuote}`,
+        `Evidence: the response is ${words} words long and still maintains a basic flow, for example ${snippetQuote}.`,
+        [snippetQuote],
       ),
     );
   } else {
@@ -914,8 +1020,9 @@ function buildFluencyChecklistDetailed(
       buildChecklistItem(
         "ตอบได้สั้นแต่ยังพอมีโครงเรื่องหลัก",
         "Response is short but still has a basic narrative shape.",
-        `หลักฐาน: ตอนนี้ ${words} คำ`,
-        `Evidence: current length is ${words} words.`,
+        `หลักฐาน: ตอนนี้ ${words} คำ โดยใจความอยู่ใน ${snippetQuote}`,
+        `Evidence: the answer is ${words} words long and still shows a core message in ${snippetQuote}.`,
+        [snippetQuote],
       ),
     );
   }
@@ -925,8 +1032,9 @@ function buildFluencyChecklistDetailed(
       buildChecklistItem(
         "ใช้ referencing เช่น this/that/those ได้เกิน 2 ครั้ง",
         "Uses referencing like this/that/those more than 2 times.",
-        `หลักฐาน: พบ referencing ${references} ครั้ง`,
-        `Evidence: ${references} referencing words found.`,
+        `หลักฐาน: คำอ้างอิงที่พบจริงคือ ${referenceQuotes.join(", ") || "ยังไม่ชัด"}`,
+        `Evidence: real referencing words found include ${referenceQuotes.join(", ") || "none clearly shown"}.`,
+        referenceQuotes.length ? referenceQuotes : [snippetQuote],
       ),
     );
   } else {
@@ -934,8 +1042,9 @@ function buildFluencyChecklistDetailed(
       buildChecklistItem(
         "ต้องใช้ this/that/those เชื่อมความคิดให้มากขึ้น",
         "Need more this/that/those referencing to link ideas.",
-        `หลักฐานตอนนี้: referencing ${references} ครั้ง`,
-        `Current evidence: ${references} referencing words found.`,
+        `หลักฐานตอนนี้: คำอ้างอิงที่พบคือ ${referenceQuotes.join(", ") || "แทบไม่มี"}`,
+        `Current evidence: the transcript shows ${referenceQuotes.join(", ") || "little clear referencing yet"}.`,
+        referenceQuotes.length ? referenceQuotes : [snippetQuote],
         "this experience, that advice, those feelings",
         "Reuse a reference word when moving from one idea to the next.",
         "That advice stayed with me, and this mindset still guides me today.",
@@ -948,8 +1057,9 @@ function buildFluencyChecklistDetailed(
       buildChecklistItem(
         "คำตอบยาวถึงระดับประมาณ 280 คำขึ้นไป",
         "The answer reaches roughly 280 words or more.",
-        `หลักฐาน: ตอนนี้ ${words} คำ`,
-        `Evidence: current length is ${words} words.`,
+        `หลักฐาน: ตอนนี้ ${words} คำ พร้อมช่วงอธิบายต่อเนื่องอย่าง ${snippetQuote}`,
+        `Evidence: the response reaches ${words} words and keeps extending the idea in ${snippetQuote}.`,
+        [snippetQuote],
       ),
     );
   } else {
@@ -957,8 +1067,9 @@ function buildFluencyChecklistDetailed(
       buildChecklistItem(
         "ต้องขยายคำตอบให้เกินประมาณ 280 คำ",
         "Need to extend the answer beyond about 280 words.",
-        `หลักฐานตอนนี้: ${words} คำ`,
-        `Current evidence: ${words} words so far.`,
+        `หลักฐานตอนนี้: จบที่ ${words} คำ และจบเร็วหลัง ${snippetQuote}`,
+        `Current evidence: the answer stops at ${words} words and could extend after ${snippetQuote}.`,
+        [snippetQuote],
         "initially, gradually, as a result",
         "Add one specific example and one reflective ending.",
         "As a result, I gradually became more confident in handling difficult situations.",
@@ -971,8 +1082,9 @@ function buildFluencyChecklistDetailed(
       buildChecklistItem(
         "ต้องลด self-correction หรือ hesitation ให้เนียนขึ้น",
         "Need smoother delivery with fewer noticeable self-corrections.",
-        `หลักฐานตอนนี้: ประเมิน self-correction/hesitation ${selfCorrections} จุด`,
-        `Current evidence: estimated self-correction/hesitation count ${selfCorrections}.`,
+        `หลักฐานตอนนี้: จุดสะดุดที่พบ เช่น ${selfCorrectionQuotes.join(", ") || "ยังประเมินจากรูปแบบสะดุดรวม ๆ"}`,
+        `Current evidence: hesitation-style cues include ${selfCorrectionQuotes.join(", ") || `an estimated count of ${selfCorrections}`}.`,
+        selfCorrectionQuotes.length ? selfCorrectionQuotes : [snippetQuote],
         "to be honest, from that point on, in particular",
         "Use planned linking phrases instead of restarting mid-sentence.",
         "From that point on, I stopped blaming my situation and focused on change.",
@@ -1008,6 +1120,7 @@ function collectTranscriptSignals(transcript: string, audioMetadataInput: unknow
   const pronunciation = buildPronunciationCriterion(pronunciationConfidencePct, audioMetadata);
 
   return {
+    transcript: trimmed,
     words,
     lower,
     references,
@@ -1035,6 +1148,7 @@ function buildDetailedBucketsFromSignals(
 ) {
   return {
     grammar: buildGrammarChecklistDetailed(
+      signals.transcript,
       grammarBand,
       signals.grammarCorrections,
       signals.hasPast,
@@ -1043,12 +1157,15 @@ function buildDetailedBucketsFromSignals(
       signals.subordinators,
     ),
     vocabulary: buildVocabularyChecklistDetailed(
+      signals.transcript,
       vocabularyBand,
       signals.collocations,
       signals.advancedCollocations,
       signals.awkwardVocabularyCount,
+      signals.vocabularyUpgrades,
     ),
     fluency: buildFluencyChecklistDetailed(
+      signals.transcript,
       fluencyBand,
       signals.words,
       signals.references,
