@@ -1128,11 +1128,17 @@ function previewText(text: string, limit = 280) {
 async function callOpenAI(prompt: string, signal: AbortSignal) {
   const apiKey = firstEnv("OPENAI_API_KEY", "CHATGPT_API_KEY");
   if (!apiKey) throw new ProviderCallError("Missing OpenAI key.", "missing_key");
-  const model = process.env.OPENAI_SPEAKING_MODEL || "gpt-4o-mini";
+  const model = process.env.OPENAI_SPEAKING_MODEL || "gpt-5.1";
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, input: prompt, max_output_tokens: 4000 }),
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      max_output_tokens: 4000,
+      reasoning: { effort: "low" },
+      text: { verbosity: "low" },
+    }),
     signal,
   });
   if (!res.ok) throw new ProviderCallError(`OpenAI HTTP ${res.status}`, "http_error", res.status);
