@@ -78,6 +78,7 @@ export type AssessmentReportCard = {
   preprocess: {
     rawTranscript: string;
     punctuatedTranscript: string;
+    whisperTranscript?: string;
   };
   scoreCalculation: {
     grammar: number;
@@ -227,6 +228,7 @@ type WhisperAudioMetadata = {
   avgLogprob?: number | null;
   avgNoSpeechProb?: number | null;
   wordsPerMinute?: number | null;
+  whisperTranscript?: string;
   whisperTranscriptPreview?: string;
   lowConfidenceWords?: Array<{
     word: string;
@@ -246,6 +248,7 @@ function parseWhisperAudioMetadata(input: unknown): WhisperAudioMetadata | null 
     avgLogprob: typeof n.avgLogprob === "number" ? n.avgLogprob : null,
     avgNoSpeechProb: typeof n.avgNoSpeechProb === "number" ? n.avgNoSpeechProb : null,
     wordsPerMinute: typeof n.wordsPerMinute === "number" ? n.wordsPerMinute : null,
+    whisperTranscript: typeof n.whisperTranscript === "string" ? n.whisperTranscript : undefined,
     whisperTranscriptPreview: typeof n.whisperTranscriptPreview === "string" ? n.whisperTranscriptPreview : "",
     lowConfidenceWords: Array.isArray(n.lowConfidenceWords)
       ? (n.lowConfidenceWords as Array<Record<string, unknown>>)
@@ -718,9 +721,36 @@ function findQuotedMatches(transcript: string, candidates: string[], limit = 4) 
   return results;
 }
 
-function collectReferenceQuotes(transcript: string, limit = 4) {
-  const matches = transcript.match(/\b(this|that|those|these)\b/gi) ?? [];
-  return matches.slice(0, limit).map((word) => quoteText(word));
+function splitTranscriptClauses(transcript: string) {
+  return transcript
+    .split(/[.!?]+|,\s+|;\s+/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter((part) => part.length >= 8);
+}
+
+function collectClauseQuotesByPatterns(transcript: string, patterns: RegExp[], limit = 6) {
+  const clauses = splitTranscriptClauses(transcript);
+  const results: string[] = [];
+  for (const clause of clauses) {
+    if (!patterns.some((pattern) => pattern.test(clause))) continue;
+    const quoted = quoteText(clause);
+    if (!results.includes(quoted)) results.push(quoted);
+    if (results.length >= limit) break;
+  }
+  return results;
+}
+
+function collectReferenceQuotes(transcript: string, limit = 6) {
+  return collectClauseQuotesByPatterns(transcript, [/\b(this|that|those|these)\b/i], limit);
+}
+
+function collectFillerQuotes(transcript: string, limit = 6) {
+  return collectClauseQuotesByPatterns(transcript, [/\b(i mean|you know|like)\b/i], limit);
+}
+
+function collectVerbFormQuotes(transcript: string, words: string[], limit = 6) {
+  const patterns = words.map((word) => new RegExp(`\\b${escapeRegExp(word)}\\b`, "i"));
+  return collectClauseQuotesByPatterns(transcript, patterns, limit);
 }
 
 function getTranscriptSnippet(transcript: string, limit = 120) {
@@ -775,11 +805,19 @@ function buildGrammarChecklistDetailed(
 ): BucketChecklist {
   const achieved: BilingualBullet[] = [];
   const missing: BilingualBullet[] = [];
-  const correctionQuotes = grammarCorrections.map((item) => quoteText(item.original));
-  const linkerQuotes = findQuotedMatches(transcript, ["because", "if", "when", "although", "though", "since", "while", "unless"]);
-  const pastQuotes = findQuotedMatches(transcript, ["was", "were", "did", "had", "started", "graduated", "realized", "changed", "stopped", "felt"]);
-  const perfectQuotes = findQuotedMatches(transcript, ["has", "have", "had"]);
-  const conditionalQuotes = findQuotedMatches(transcript, ["if", "would", "could", "might", "will"]);
+  const correctionQuotes = grammarCorrections.map((item) => quoteText(item.original)).slice(0, 6);
+  const linkerQuotes = collectClauseQuotesByPatterns(
+    transcript,
+    [/\b(because|if|when|although|though|since|while|unless)\b/i],
+    6,
+  );
+  const pastQuotes = collectVerbFormQuotes(
+    transcript,
+    ["was", "were", "did", "started", "graduated", "realized", "changed", "stopped", "felt"],
+    6,
+  );
+  const perfectQuotes = collectClauseQuotesByPatterns(transcript, [/\b(has|have|had)\s+\w+/i], 6);
+  const conditionalQuotes = collectClauseQuotesByPatterns(transcript, [/\bif\b[\s\S]{0,60}\b(would|could|might|will)\b/i], 6);
   const snippetQuote = quoteText(getTranscriptSnippet(transcript));
 
   if (grammarBand >= 7) {
@@ -830,7 +868,7 @@ function buildGrammarChecklistDetailed(
         "Shows reasonably strong past/perfect tense control.",
         `หลักฐาน: past จริง ${pastQuotes.join(", ") || "ยังไม่ชัด"} และ perfect ${perfectQuotes.join(", ") || "ยังไม่ชัด"}`,
         `Evidence: past forms include ${pastQuotes.join(", ") || "none clear yet"}; perfect forms include ${perfectQuotes.join(", ") || "none clear yet"}.`,
-        [...pastQuotes, ...perfectQuotes].slice(0, 4),
+        [...pastQuotes, ...perfectQuotes].slice(0, 6),
       ),
     );
   } else {
@@ -840,7 +878,7 @@ function buildGrammarChecklistDetailed(
         "Need stronger control of past and perfect forms across the answer.",
         `หลักฐานตอนนี้: past ที่เห็นคือ ${pastQuotes.join(", ") || "ยังไม่ชัด"} และ perfect ${perfectQuotes.join(", ") || "ยังไม่ชัด"}`,
         `Current evidence: the transcript shows ${pastQuotes.join(", ") || "limited past marking"} and ${perfectQuotes.join(", ") || "no clear perfect form yet"}.`,
-        [...pastQuotes, ...perfectQuotes].slice(0, 4),
+        [...pastQuotes, ...perfectQuotes].slice(0, 6),
         "perfect tenses, although, since",
         "Turn short past statements into fuller past/perfect sentences.",
         "Although I had just graduated, I still felt uncertain about my future.",
@@ -891,8 +929,8 @@ function buildVocabularyChecklistDetailed(
 ): BucketChecklist {
   const achieved: BilingualBullet[] = [];
   const missing: BilingualBullet[] = [];
-  const collocationQuotes = findQuotedMatches(transcript, [...B1_COLLOCATIONS, ...C1_C2_COLLOCATIONS], 5);
-  const awkwardQuotes = vocabularyUpgrades.map((item) => quoteText(item.original));
+  const collocationQuotes = findQuotedMatches(transcript, [...B1_COLLOCATIONS, ...C1_C2_COLLOCATIONS], 6);
+  const awkwardQuotes = vocabularyUpgrades.map((item) => quoteText(item.original)).slice(0, 6);
   const snippetQuote = quoteText(getTranscriptSnippet(transcript));
 
   achieved.push(
@@ -992,7 +1030,7 @@ function buildFluencyChecklistDetailed(
   const achieved: BilingualBullet[] = [];
   const missing: BilingualBullet[] = [];
   const referenceQuotes = collectReferenceQuotes(transcript);
-  const selfCorrectionQuotes = findQuotedMatches(transcript, ["I mean", "you know"], 4);
+  const selfCorrectionQuotes = collectFillerQuotes(transcript, 6);
   const snippetQuote = quoteText(getTranscriptSnippet(transcript));
 
   if (fluencyBand >= 7) {
@@ -1337,6 +1375,7 @@ function buildLocalRubricAssessment(
       preprocess: {
         rawTranscript: transcript,
         punctuatedTranscript,
+        whisperTranscript: signals.audioMetadata?.whisperTranscript ?? undefined,
       },
       scoreCalculation: {
         grammar: grammarBand,
@@ -1429,6 +1468,7 @@ function normalizeAssessmentResult(body: AssessBody, data: Record<string, unknow
     preprocess: {
       rawTranscript: body.transcript,
       punctuatedTranscript,
+      whisperTranscript: signals.audioMetadata?.whisperTranscript ?? undefined,
     },
     scoreCalculation: {
       grammar: grammarBand,
@@ -1590,6 +1630,7 @@ function fallbackAssessment(body: AssessBody, fallbackReason: string, attemptedP
       preprocess: {
         rawTranscript: body.transcript,
         punctuatedTranscript,
+        whisperTranscript: undefined,
       },
       scoreCalculation: {
         grammar: toBucketBand(b - 0.5),

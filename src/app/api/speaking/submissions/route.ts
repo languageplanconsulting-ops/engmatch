@@ -135,6 +135,7 @@ async function buildWhisperAudioMetadata(audioUrl: string, prompt: string, trans
       avgLogprob: avgLogprob !== null ? Number(avgLogprob.toFixed(3)) : null,
       avgNoSpeechProb: avgNoSpeechProb !== null ? Number(avgNoSpeechProb.toFixed(3)) : null,
       wordsPerMinute,
+      whisperTranscript: whisper.text ?? "",
       whisperTranscriptPreview: (whisper.text ?? "").slice(0, 240),
       lowConfidenceWords,
     };
