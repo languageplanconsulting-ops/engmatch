@@ -145,6 +145,27 @@ export type AssessmentResult = {
 type GrammarCorrection = AssessmentResult["grammarCorrections"][number];
 type VocabularyUpgrade = AssessmentResult["vocabularyUpgrades"][number];
 
+type GeminiCompactAssessment = {
+  summaryEn: string;
+  summaryTh: string;
+  grammarBand: number;
+  vocabularyBand: number;
+  fluencyBand: number;
+  grammarAchievedTh: string;
+  grammarAchievedEn: string;
+  grammarMissingTh: string;
+  grammarMissingEn: string;
+  vocabAchievedTh: string;
+  vocabAchievedEn: string;
+  vocabMissingTh: string;
+  vocabMissingEn: string;
+  fluencyAchievedTh: string;
+  fluencyAchievedEn: string;
+  fluencyMissingTh: string;
+  fluencyMissingEn: string;
+  corrections: StepUpCorrection[];
+};
+
 class ProviderCallError extends Error {
   code: string;
   status?: number;
@@ -345,6 +366,67 @@ function extractOpenAIText(payload: Record<string, unknown>) {
     .join("\n")
     .trim();
   return text;
+}
+
+function parseKeyValueLines(text: string) {
+  const result: Record<string, string> = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const idx = line.indexOf(":");
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    result[key] = value;
+  }
+  return result;
+}
+
+function toOptionalText(value: string | undefined) {
+  if (!value) return undefined;
+  return value === "-" ? undefined : value;
+}
+
+function parseGeminiCompactResponse(text: string): GeminiCompactAssessment {
+  const map = parseKeyValueLines(text);
+  const corrections: StepUpCorrection[] = [1, 2, 3].map((idx) => ({
+    type:
+      map[`CORRECTION_${idx}_TYPE`] === "fluency" || map[`CORRECTION_${idx}_TYPE`] === "vocabulary"
+        ? (map[`CORRECTION_${idx}_TYPE`] as StepUpCorrection["type"])
+        : "grammar",
+    targetBand: toBucketBand(map[`CORRECTION_${idx}_TARGET_BAND`] ?? 7),
+    originalText: toOptionalText(map[`CORRECTION_${idx}_ORIGINAL`]),
+    improvedText: toOptionalText(map[`CORRECTION_${idx}_IMPROVED`]),
+    suggestionToAdd: toOptionalText(map[`CORRECTION_${idx}_SUGGESTION`]),
+    thaiExplanation: map[`CORRECTION_${idx}_TH`] ?? "",
+    englishExplanation: map[`CORRECTION_${idx}_EN`] ?? "",
+  }));
+
+  const compact: GeminiCompactAssessment = {
+    summaryEn: map.SUMMARY_EN ?? "",
+    summaryTh: map.SUMMARY_TH ?? "",
+    grammarBand: toBucketBand(map.GRAMMAR_BAND ?? 6),
+    vocabularyBand: toBucketBand(map.VOCAB_BAND ?? 6),
+    fluencyBand: toBucketBand(map.FLUENCY_BAND ?? 6),
+    grammarAchievedTh: map.GRAMMAR_ACHIEVED_TH ?? "",
+    grammarAchievedEn: map.GRAMMAR_ACHIEVED_EN ?? "",
+    grammarMissingTh: map.GRAMMAR_MISSING_TH ?? "",
+    grammarMissingEn: map.GRAMMAR_MISSING_EN ?? "",
+    vocabAchievedTh: map.VOCAB_ACHIEVED_TH ?? "",
+    vocabAchievedEn: map.VOCAB_ACHIEVED_EN ?? "",
+    vocabMissingTh: map.VOCAB_MISSING_TH ?? "",
+    vocabMissingEn: map.VOCAB_MISSING_EN ?? "",
+    fluencyAchievedTh: map.FLUENCY_ACHIEVED_TH ?? "",
+    fluencyAchievedEn: map.FLUENCY_ACHIEVED_EN ?? "",
+    fluencyMissingTh: map.FLUENCY_MISSING_TH ?? "",
+    fluencyMissingEn: map.FLUENCY_MISSING_EN ?? "",
+    corrections,
+  };
+
+  if (!compact.summaryEn || !compact.summaryTh) {
+    throw new Error("Gemini compact response missing summaries");
+  }
+  return compact;
 }
 
 function normalizeSpeechSurface(text: string) {
@@ -810,6 +892,51 @@ function buildLocalRubricAssessment(
   };
 }
 
+function buildGeminiFirstAssessment(
+  body: AssessBody,
+  compact: GeminiCompactAssessment,
+  providerFailures: string[],
+  providerDiagnostics: ProviderDiagnostic[],
+  attemptedProviders: string[],
+): AssessmentResult {
+  const base = buildLocalRubricAssessment(body, providerFailures, providerDiagnostics, attemptedProviders);
+  const pronunciationBand = base.criteria.pronunciation.band;
+  const rawAverage = Number((((compact.grammarBand + compact.vocabularyBand + compact.fluencyBand + pronunciationBand) / 4)).toFixed(2));
+  const roundedBand = roundOverallBand(rawAverage);
+
+  base.criteria.grammarRangeAccuracy.band = compact.grammarBand;
+  base.criteria.lexicalResource.band = compact.vocabularyBand;
+  base.criteria.fluencyCoherence.band = compact.fluencyBand;
+  base.overall.rawAverage = rawAverage;
+  base.overall.roundedBand = roundedBand;
+  base.overall.englishSummary = compact.summaryEn;
+  base.overall.thaiSummary = compact.summaryTh;
+  base.reportCard.scoreCalculation.grammar = compact.grammarBand;
+  base.reportCard.scoreCalculation.vocabulary = compact.vocabularyBand;
+  base.reportCard.scoreCalculation.fluency = compact.fluencyBand;
+  base.reportCard.scoreCalculation.exactAverage = rawAverage;
+  base.reportCard.scoreCalculation.roundedBand = roundedBand;
+  base.reportCard.scoreCalculation.formula = `(${compact.fluencyBand} + ${compact.grammarBand} + ${compact.vocabularyBand} + ${pronunciationBand}) / 4 = ${rawAverage}`;
+  base.reportCard.buckets.grammar = buildBucketChecklist(
+    compact.grammarBand,
+    { thai: compact.grammarAchievedTh, english: compact.grammarAchievedEn },
+    { thai: compact.grammarMissingTh, english: compact.grammarMissingEn },
+  );
+  base.reportCard.buckets.vocabulary = buildBucketChecklist(
+    compact.vocabularyBand,
+    { thai: compact.vocabAchievedTh, english: compact.vocabAchievedEn },
+    { thai: compact.vocabMissingTh, english: compact.vocabMissingEn },
+  );
+  base.reportCard.buckets.fluency = buildBucketChecklist(
+    compact.fluencyBand,
+    { thai: compact.fluencyAchievedTh, english: compact.fluencyAchievedEn },
+    { thai: compact.fluencyMissingTh, english: compact.fluencyMissingEn },
+  );
+  base.reportCard.stepUpCorrections = compact.corrections;
+  base.errorCode = undefined;
+  return base;
+}
+
 function normalizeAssessmentResult(body: AssessBody, data: Record<string, unknown>): AssessmentResult {
   const words = body.transcript.trim().split(/\s+/).filter(Boolean).length;
   const responseInfo = (data.responseInfo ?? {}) as Record<string, unknown>;
@@ -1112,6 +1239,70 @@ JSON SHAPE
   "sampleImprovedAnswer":{"english":"","thaiNote":""}
 }`;
 
+const GEMINI_FIRST_PROMPT = `ROLE
+You are an expert IELTS Speaking examiner.
+Return plain text only. No JSON. No markdown. No bullet points.
+
+TASK
+Evaluate the transcript for IELTS Speaking Part assessment.
+Score only Grammar, Vocabulary, and Fluency using the bucket logic below.
+Pronunciation is handled separately by the server, so do not score pronunciation.
+Do not punish ASR run-on text, punctuation loss, or natural false starts.
+
+BUCKETS
+Grammar bands: 5,6,7,8,9 only.
+Vocabulary bands: 5,6,7,8,9 only.
+Fluency bands: 5,6,7,8,9 only.
+
+FORMAT
+Return exactly these keys, one per line:
+SUMMARY_EN:
+SUMMARY_TH:
+GRAMMAR_BAND:
+VOCAB_BAND:
+FLUENCY_BAND:
+GRAMMAR_ACHIEVED_TH:
+GRAMMAR_ACHIEVED_EN:
+GRAMMAR_MISSING_TH:
+GRAMMAR_MISSING_EN:
+VOCAB_ACHIEVED_TH:
+VOCAB_ACHIEVED_EN:
+VOCAB_MISSING_TH:
+VOCAB_MISSING_EN:
+FLUENCY_ACHIEVED_TH:
+FLUENCY_ACHIEVED_EN:
+FLUENCY_MISSING_TH:
+FLUENCY_MISSING_EN:
+CORRECTION_1_TYPE:
+CORRECTION_1_TARGET_BAND:
+CORRECTION_1_ORIGINAL:
+CORRECTION_1_IMPROVED:
+CORRECTION_1_SUGGESTION:
+CORRECTION_1_TH:
+CORRECTION_1_EN:
+CORRECTION_2_TYPE:
+CORRECTION_2_TARGET_BAND:
+CORRECTION_2_ORIGINAL:
+CORRECTION_2_IMPROVED:
+CORRECTION_2_SUGGESTION:
+CORRECTION_2_TH:
+CORRECTION_2_EN:
+CORRECTION_3_TYPE:
+CORRECTION_3_TARGET_BAND:
+CORRECTION_3_ORIGINAL:
+CORRECTION_3_IMPROVED:
+CORRECTION_3_SUGGESTION:
+CORRECTION_3_TH:
+CORRECTION_3_EN:
+
+RULES
+- Keep every value to one short line.
+- Use "-" for unused ORIGINAL, IMPROVED, or SUGGESTION fields.
+- Return exactly 3 corrections.
+- Keep summaries short and useful.
+- Thai first quality should still be strong.
+`;
+
 function buildPrompt(body: AssessBody) {
   return `${SIMPLE_PROMPT}
 
@@ -1119,6 +1310,14 @@ Part: ${body.mode}
 Question: ${body.question}
 Transcript: ${body.transcript}
 Audio metadata: ${body.audioMetadata ? JSON.stringify(body.audioMetadata) : "none"}`;
+}
+
+function buildGeminiFirstPrompt(body: AssessBody) {
+  return `${GEMINI_FIRST_PROMPT}
+
+Part: ${body.mode}
+Question: ${body.question}
+Transcript: ${body.transcript}`;
 }
 
 function previewText(text: string, limit = 280) {
@@ -1184,7 +1383,7 @@ async function callGemini(prompt: string, signal: AbortSignal) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      generationConfig: { temperature: 0.1, maxOutputTokens: 4000, responseMimeType: "application/json" },
+      generationConfig: { temperature: 0.1, maxOutputTokens: 2000, responseMimeType: "text/plain" },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     }),
     signal,
@@ -1222,6 +1421,7 @@ export async function POST(req: Request) {
   }
 
   const prompt = buildPrompt(body);
+  const geminiPrompt = buildGeminiFirstPrompt(body);
   const providers: Array<{
     id: ProviderId;
     configured: boolean;
@@ -1232,7 +1432,7 @@ export async function POST(req: Request) {
       id: "gemini",
       configured: Boolean(firstEnv("GEMINI_API_KEY", "GOOGLE_API_KEY")),
       model: process.env.GEMINI_SPEAKING_MODEL || "gemini-2.5-flash",
-      run: () => withTimeout((signal) => callGemini(prompt, signal)),
+      run: () => withTimeout((signal) => callGemini(geminiPrompt, signal)),
     },
     {
       id: "anthropic",
@@ -1294,6 +1494,29 @@ export async function POST(req: Request) {
       if (diagnostic) {
         diagnostic.stage = "response";
         diagnostic.responsePreview = previewText(output.text);
+      }
+      if (provider.id === "gemini") {
+        let compact: GeminiCompactAssessment;
+        try {
+          if (diagnostic) diagnostic.stage = "parse";
+          compact = parseGeminiCompactResponse(output.text);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown Gemini compact parse error";
+          if (diagnostic) {
+            diagnostic.code = "parse_error";
+            diagnostic.message = msg;
+          }
+          throw new ProviderCallError(msg, "parse_error");
+        }
+        const normalized = buildGeminiFirstAssessment(body, compact, failures, diagnostics, attempted);
+        normalized.feedbackSource = output.provider;
+        normalized.feedbackModel = output.model;
+        if (diagnostic) {
+          diagnostic.ok = true;
+          diagnostic.stage = "normalize";
+          diagnostic.message = "Success";
+        }
+        return NextResponse.json(normalized);
       }
       let parsed: Record<string, unknown>;
       try {
