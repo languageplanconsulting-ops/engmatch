@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type {
   AssessmentResult,
+  BilingualBullet,
   BucketChecklist,
   StepUpCorrection,
 } from "@/app/api/speaking/assess/route";
@@ -25,6 +26,53 @@ function BucketColumn({
   subtitle: string;
   checklist: BucketChecklist;
 }) {
+  function ChecklistItem({
+    item,
+    state,
+  }: {
+    item: BilingualBullet;
+    state: "achieved" | "target";
+  }) {
+    const isAchieved = state === "achieved";
+    return (
+      <li
+        className={`rounded-2xl border p-3 ${
+          isAchieved ? "border-emerald-200 bg-emerald-50/80" : "border-amber-200 bg-amber-50/80"
+        }`}
+      >
+        <p className={`text-sm font-semibold ${isAchieved ? "checklist-done" : "checklist-miss"}`}>
+          {`${isAchieved ? "✓" : "🔒"} ${item.thai}`}
+        </p>
+        <p className={`mt-1 text-xs ${isAchieved ? "text-emerald-700" : "text-amber-700"}`}>{item.english}</p>
+
+        {(item.evidenceThai || item.evidenceEnglish) && (
+          <div className="mt-3 rounded-xl bg-white/80 p-3">
+            <p className="text-xs font-semibold text-slate-900">หลักฐาน / Evidence</p>
+            {item.evidenceThai && <p className="mt-1 text-xs text-slate-700">{item.evidenceThai}</p>}
+            {item.evidenceEnglish && <p className="mt-1 text-xs text-slate-500">{item.evidenceEnglish}</p>}
+          </div>
+        )}
+
+        {!isAchieved && (
+          <div className="mt-3 space-y-2">
+            <div className="rounded-xl bg-white/80 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Vocabulary</p>
+              <p className="mt-1 text-xs font-medium text-slate-800">{item.suggestedVocabulary ?? "-"}</p>
+            </div>
+            <div className="rounded-xl bg-white/80 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Fix</p>
+              <p className="mt-1 text-xs font-medium text-slate-800">{item.suggestedFix ?? "-"}</p>
+            </div>
+            <div className="rounded-xl bg-white/80 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Sentence</p>
+              <p className="mt-1 text-xs font-medium italic text-slate-800">{item.suggestedSentence ?? "-"}</p>
+            </div>
+          </div>
+        )}
+      </li>
+    );
+  }
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -43,10 +91,7 @@ function BucketColumn({
           <p className="mb-2 text-xs text-slate-500">Achieved</p>
           <ul className="space-y-2">
             {checklist.achieved.map((item, idx) => (
-              <li key={idx} className="rounded-xl bg-emerald-50 p-3">
-                <p className="checklist-done text-sm font-semibold">{`✓ ${item.thai}`}</p>
-                <p className="text-xs text-emerald-700">{item.english}</p>
-              </li>
+              <ChecklistItem key={idx} item={item} state="achieved" />
             ))}
           </ul>
         </div>
@@ -56,10 +101,7 @@ function BucketColumn({
           <p className="mb-2 text-xs text-slate-500">{`Target +1 Band (${checklist.nextTargetBand})`}</p>
           <ul className="space-y-2">
             {checklist.missingForNextBand.map((item, idx) => (
-              <li key={idx} className="rounded-xl bg-amber-50 p-3">
-                <p className="checklist-miss text-sm font-semibold">{`🔒 ${item.thai}`}</p>
-                <p className="text-xs text-amber-700">{item.english}</p>
-              </li>
+              <ChecklistItem key={idx} item={item} state="target" />
             ))}
           </ul>
         </div>
@@ -329,18 +371,6 @@ export function SpeakingAssessmentReport({
             <CorrectionCard key={idx} correction={correction} />
           ))}
         </div>
-      </div>
-
-      <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
-        <SectionTitle thai="Overall Summary" english="Bilingual examiner summary" />
-        <p className="text-lg font-semibold leading-8 text-slate-900">{result.overall.thaiSummary}</p>
-        <p className="mt-2 text-sm leading-7 text-slate-500">{result.overall.englishSummary}</p>
-        <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-400">{result.overall.reliabilityWarning}</p>
-        {result.errorCode === "fallback" && (
-          <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-xs font-medium text-amber-700">
-            {result.fallbackReason ?? "Fallback estimate only."}
-          </p>
-        )}
       </div>
 
       <button type="button" className="sp-reassess-btn" onClick={assess}>
